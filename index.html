@@ -1,0 +1,2060 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KEPCO런</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Segoe UI', sans-serif;
+}
+canvas {
+  border: 2px solid #e94560;
+  border-radius: 8px;
+  max-width: 100vw;
+  max-height: 100vh;
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const W = 800;
+const H = 400;
+const GROUND_Y = H - 60;
+const GRAVITY = 0.6;
+const JUMP_FORCE = -13;
+const PLAYER_SIZE = 55;
+const PLAYER_X = 80;
+
+// Sprite frames per character
+const CHAR_FRAMES = {
+  powercat: { run: [], jump: [], idle: [], damaged: [], attack: [] },
+  hongsi: { run: [], jump: [], idle: [], damaged: [], attack: [] },
+};
+let spritesLoaded = 0;
+let spritesTotal = 0;
+
+function loadFrames(charFrames, category, dir, files) {
+  for (const f of files) {
+    spritesTotal++;
+    const img = new Image();
+    img.src = dir + f;
+    img.onload = () => { spritesLoaded++; };
+    charFrames[category].push(img);
+  }
+}
+// PowerCat
+loadFrames(CHAR_FRAMES.powercat, 'run', 'sprites/', ['run_1.png','run_2.png','run_3.png','run_4.png']);
+loadFrames(CHAR_FRAMES.powercat, 'jump', 'sprites/', ['jump_1.png','jump_2.png','jump_3.png','jump_4.png']);
+loadFrames(CHAR_FRAMES.powercat, 'idle', 'sprites/', ['idle_0.png','idle_1.png','idle_2.png','idle_3.png']);
+loadFrames(CHAR_FRAMES.powercat, 'damaged', 'sprites/', ['row7_0.png']);
+loadFrames(CHAR_FRAMES.powercat, 'attack', 'sprites/', ['damaged_0.png','damaged_1.png','damaged_2.png','damaged_3.png']);
+// Hongsi
+loadFrames(CHAR_FRAMES.hongsi, 'run', 'sprites_hongsi/', ['final_run_0.png','final_run_1.png','final_run_2.png','final_run_3.png','final_run_4.png','final_run_5.png','final_run_6.png']);
+loadFrames(CHAR_FRAMES.hongsi, 'jump', 'sprites_hongsi/', ['final_jump_0.png','final_jump_1.png','final_jump_2.png','final_jump_3.png']);
+loadFrames(CHAR_FRAMES.hongsi, 'idle', 'sprites_hongsi/', ['final_idle_0.png','final_idle_1.png','final_idle_2.png','final_idle_3.png']);
+loadFrames(CHAR_FRAMES.hongsi, 'damaged', 'sprites_hongsi/', ['final_damaged_0.png','final_damaged_1.png']);
+loadFrames(CHAR_FRAMES.hongsi, 'attack', 'sprites_hongsi/', ['final_attack_0.png','final_attack_1.png','final_attack_2.png']);
+
+function getFrames() {
+  const ch = CHARACTERS[selectedChar];
+  if (ch.type === 'powercat') return CHAR_FRAMES.powercat;
+  if (ch.type === 'hongsi') return CHAR_FRAMES.hongsi;
+  return null;
+}
+
+let animFrame = 0;
+let animTimer = 0;
+const ANIM_SPEED = 6;
+
+// Attack state
+let isAttacking = false;
+let attackFrame = 0;
+let attackTimer = 0;
+const ATTACK_FRAME_SPEED = 4; // faster animation for attack
+const ATTACK_DURATION = ATTACK_FRAME_SPEED * 4; // 4 frames total
+let attackCharges = 5;
+let lastChargeScore = 0; // tracks last 1000-point threshold for charge refill
+
+// Game states
+const STATE = { START: 0, SELECT: 1, PLAYING: 2, GAME_OVER: 3 };
+
+let gameState = STATE.START;
+let selectedChar = 0; // 0=파워캣, 1=네모, 2=세모
+
+// Character definitions
+const CHARACTERS = [
+  { name: '파워캣', color: '#FFD700', type: 'powercat' },
+  { name: '홍시', color: '#D4A574', type: 'hongsi' },
+];
+let score = 0;
+let highScore = (window.scoreAPI ? window.scoreAPI.load() : parseInt(localStorage.getItem('kepcoRunHighScore'))) || 0;
+let speed = 8;
+let baseSpeed = 8;
+let spawnTimer = 0;
+let spawnInterval = 120;
+let lastSpawnWidth = 0; // 직전 스폰의 총 폭 (안전 간격 계산용)
+let frameCount = 0;
+let bonusScore = 0;
+
+// Player
+const player = {
+  x: PLAYER_X,
+  y: GROUND_Y - PLAYER_SIZE,
+  w: PLAYER_SIZE,
+  h: PLAYER_SIZE,
+  vy: 0,
+  jumpsLeft: 2,
+  onGround: true,
+};
+
+// Obstacles
+let obstacles = [];
+const OBSTACLE_TYPES = [
+  { name: '전봇대', w: 20, h: 60, color: '#888', breakable: false },
+  { name: '높은전봇대', w: 20, h: 90, color: '#7a7a7a', breakable: false },
+  { name: '송전탑', w: 40, h: 80, color: '#666', triangle: true, breakable: false },
+  { name: '대형송전탑', w: 55, h: 110, color: '#5a5a5a', triangle: true, breakable: false },
+  { name: '배전함', w: 50, h: 30, color: '#777', breakable: true },
+  { name: '이중배전함', w: 70, h: 45, color: '#6a6a6a', breakable: true },
+  { name: '공사바리케이드', w: 60, h: 35, color: '#E07020', breakable: true },
+  { name: '전선릴', w: 35, h: 35, color: '#555', circle: true, breakable: true },
+  { name: '변압기', w: 30, h: 50, color: '#4a7a4a', breakable: false },
+  { name: '건전지', w: 22, h: 45, color: '#2a2a2a', breakable: true },
+  { name: '지상개폐기', w: 45, h: 38, color: '#5a6a5a', breakable: false },
+];
+
+// Projectiles
+let projectiles = [];
+// Destroy particles
+let particles = [];
+// Coins (continuous guide line)
+let coins = [];
+let coinTimer = 0;
+const COIN_GAP = 6; // frames between each coin
+const COIN_SIZE = 16;
+// Coin path guides — keeps obstacle positions even after destruction
+let coinGuides = [];
+// Floating score texts
+let floatingTexts = [];
+
+// Giant power-up items
+let items = [];
+let itemSpawnTimer = 0;
+const ITEM_SPAWN_MIN = 600;
+const ITEM_SPAWN_MAX = 1000;
+let nextItemSpawn = 800;
+
+let giantMode = false;
+let giantTimer = 0;
+const GIANT_DURATION = 180;
+const GIANT_SCALE = 2.2;
+
+let magnetMode = false;
+let magnetTimer = 0;
+const MAGNET_DURATION = 180;
+const MAGNET_RANGE = 250;
+const MAGNET_SPEED = 8;
+
+// Post-giant invincibility
+let invincible = false;
+let invincibleTimer = 0;
+const INVINCIBLE_DURATION = 50; // ~0.8초
+
+// Screen shake
+let shakeTimer = 0;
+let shakeIntensity = 0;
+
+// Game over animation
+let gameOverTimer = 0;
+const GAME_OVER_ANIM_DURATION = 90; // frames before UI fully appears
+let deathVY = 0;
+let deathRotation = 0;
+let deathY = 0;
+let deathX = 0;
+
+// Pits (낭떠러지)
+let pits = [];
+const PIT_WIDTH_SINGLE = 160;
+const PIT_WIDTH_DOUBLE = 300;
+let fallingIntoPit = false;
+
+// Obstacle patterns (grouped spawns)
+const PATTERNS = [
+  // 배전함 두 개 연속
+  [{ type: 4, offsetX: 0 }, { type: 4, offsetX: 80 }],
+  // 낮은거 + 높은거
+  [{ type: 4, offsetX: 0 }, { type: 0, offsetX: 90 }],
+  // 전봇대 세 개 간격 좁게
+  [{ type: 0, offsetX: 0 }, { type: 0, offsetX: 60 }, { type: 0, offsetX: 120 }],
+  // 바리케이드 + 전선릴
+  [{ type: 6, offsetX: 0 }, { type: 7, offsetX: 85 }],
+];
+
+// Background themes (cycle every 1000 points)
+const THEMES = [
+  { sky1: '#87CEEB', sky2: '#B0E0FF', ground: '#555', road: '#FFD700', cloud: 'rgba(255,255,255,0.8)' },  // 낮 (기본)
+  { sky1: '#FFA07A', sky2: '#FFDAB9', ground: '#6a6a6a', road: '#FFC04D', cloud: 'rgba(255,235,210,0.8)' }, // 석양
+  { sky1: '#4a4a7a', sky2: '#6a6a9e', ground: '#555', road: '#AAAAFF', cloud: 'rgba(190,190,230,0.6)' },   // 밤
+  { sky1: '#5A7A97', sky2: '#7FA4BF', ground: '#5a5a5a', road: '#88DDFF', cloud: 'rgba(210,225,240,0.7)' }, // 새벽
+  { sky1: '#8B6BBF', sky2: '#6DA8C2', ground: '#606060', road: '#E88BFF', cloud: 'rgba(220,210,240,0.7)' },   // 오로라
+];
+
+// Color interpolation for smooth theme transitions
+function parseColor(c) {
+  if (c.startsWith('#')) {
+    const h = c.slice(1);
+    return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16), 1];
+  }
+  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
+  return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+}
+function lerpColor(c1, c2, t) {
+  const [r1,g1,b1,a1] = parseColor(c1);
+  const [r2,g2,b2,a2] = parseColor(c2);
+  return `rgba(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)},${(a1+(a2-a1)*t).toFixed(2)})`;
+}
+function getTheme() {
+  const idx = Math.floor(score / 1000) % THEMES.length;
+  const progress = (score % 1000) / 1000;
+  if (progress > 0.8) {
+    const next = (idx + 1) % THEMES.length;
+    const t = (progress - 0.8) / 0.2;
+    const a = THEMES[idx], b = THEMES[next];
+    return { sky1: lerpColor(a.sky1, b.sky1, t), sky2: lerpColor(a.sky2, b.sky2, t), ground: lerpColor(a.ground, b.ground, t), road: lerpColor(a.road, b.road, t), cloud: lerpColor(a.cloud, b.cloud, t) };
+  }
+  return THEMES[idx];
+}
+
+// Clouds
+let clouds = [];
+function initClouds() {
+  clouds = [];
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      x: Math.random() * W,
+      y: 30 + Math.random() * 80,
+      r: 20 + Math.random() * 25,
+      speed: 0.3 + Math.random() * 0.5,
+    });
+  }
+}
+initClouds();
+
+// Road dashes
+let roadOffset = 0;
+
+function resetGame() {
+  player.y = GROUND_Y - PLAYER_SIZE;
+  player.vy = 0;
+  player.jumpsLeft = 2;
+  player.onGround = true;
+  obstacles = [];
+  projectiles = [];
+  particles = [];
+  coins = [];
+  coinTimer = 0;
+  coinGuides = [];
+  floatingTexts = [];
+  items = [];
+  giantMode = false;
+  giantTimer = 0;
+  magnetMode = false;
+  magnetTimer = 0;
+  nextItemSpawn = 800;
+  itemSpawnTimer = 0;
+  shakeTimer = 0;
+  shakeIntensity = 0;
+  invincible = false;
+  invincibleTimer = 0;
+  pits = [];
+  fallingIntoPit = false;
+  // Pre-fill coins across screen at ground level
+  const groundCoinY = GROUND_Y - PLAYER_SIZE / 2 - COIN_SIZE / 2;
+  const coinSpacing = COIN_GAP * baseSpeed;
+  for (let x = PLAYER_X; x <= W + 50; x += coinSpacing) {
+    coins.push({ x, y: groundCoinY, w: COIN_SIZE, h: COIN_SIZE });
+  }
+  score = 0;
+  bonusScore = 0;
+  isAttacking = false;
+  attackFrame = 0;
+  attackTimer = 0;
+  attackCharges = 5;
+  lastChargeScore = 0;
+  speed = baseSpeed;
+  spawnTimer = 0;
+  spawnInterval = 120;
+  lastSpawnWidth = 0;
+  frameCount = 0;
+  roadOffset = 0;
+  gameOverTimer = 0;
+  deathVY = 0;
+  deathRotation = 0;
+}
+
+function triggerGameOver() {
+  gameState = STATE.GAME_OVER;
+  gameOverTimer = 0;
+  deathVY = -10;
+  deathRotation = 0;
+  deathY = player.y;
+  deathX = player.x;
+  if (score > highScore) {
+    highScore = score;
+    if (window.scoreAPI) window.scoreAPI.save(highScore);
+    else localStorage.setItem('kepcoRunHighScore', highScore);
+  }
+}
+
+function jump() {
+  if (gameState === STATE.PLAYING && player.jumpsLeft > 0) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+    player.jumpsLeft--;
+  }
+}
+
+function attack() {
+  if (gameState === STATE.PLAYING && !isAttacking && attackCharges > 0) {
+    attackCharges--;
+    isAttacking = true;
+    attackFrame = 0;
+    attackTimer = 0;
+    // Spawn projectile
+    projectiles.push({
+      x: player.x + player.w,
+      y: player.y + player.h / 2 - 8,
+      w: 24,
+      h: 16,
+      speed: 12,
+      life: 60,
+    });
+  }
+}
+
+function handleInput(e) {
+  if (gameState === STATE.START) {
+    e.preventDefault();
+    gameState = STATE.SELECT;
+    return;
+  }
+  if (gameState === STATE.GAME_OVER) {
+    if (gameOverTimer < 70) return; // wait for animation
+    gameState = STATE.SELECT;
+    return;
+  }
+  if (gameState === STATE.PLAYING) {
+    e.preventDefault();
+    jump();
+  }
+}
+
+// Character selection click
+function handleSelectClick(e) {
+  if (gameState !== STATE.SELECT) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+
+  const boxW = 130, boxH = 160, gap = 25;
+  const totalW = CHARACTERS.length * boxW + (CHARACTERS.length - 1) * gap;
+  const startX = (W - totalW) / 2;
+  const boxY = 150;
+
+  for (let i = 0; i < CHARACTERS.length; i++) {
+    const bx = startX + i * (boxW + gap);
+    if (mx >= bx && mx <= bx + boxW && my >= boxY && my <= boxY + boxH) {
+      selectedChar = i;
+      resetGame();
+      gameState = STATE.PLAYING;
+      return;
+    }
+  }
+}
+
+// Input
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    handleInput(e);
+    return;
+  }
+  if (e.code === 'KeyA' && gameState === STATE.PLAYING) {
+    attack();
+    return;
+  }
+  if (gameState === STATE.GAME_OVER && e.code === 'Enter') {
+    if (gameOverTimer < 70) return;
+    gameState = STATE.SELECT;
+    return;
+  }
+  if (gameState === STATE.SELECT) {
+    if (e.code === 'ArrowLeft') {
+      selectedChar = (selectedChar + CHARACTERS.length - 1) % CHARACTERS.length;
+    } else if (e.code === 'ArrowRight') {
+      selectedChar = (selectedChar + 1) % CHARACTERS.length;
+    } else if (e.code === 'Enter') {
+      resetGame();
+      gameState = STATE.PLAYING;
+    } else if (e.code === 'Digit1') { selectedChar = 0; resetGame(); gameState = STATE.PLAYING; }
+    else if (e.code === 'Digit2') { selectedChar = 1; resetGame(); gameState = STATE.PLAYING; }
+  }
+});
+canvas.addEventListener('click', (e) => {
+  if (gameState === STATE.SELECT) {
+    handleSelectClick(e);
+  } else {
+    handleInput(e);
+  }
+});
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (gameState === STATE.SELECT) {
+    const touch = e.touches[0];
+    handleSelectClick(touch);
+  } else {
+    handleInput(e);
+  }
+});
+
+function getSpawnX() {
+  // Spawn far enough off-screen so coins settle before entering view
+  const tPeak = -JUMP_FORCE / GRAVITY;
+  return W + Math.ceil(tPeak * speed) + 80;
+}
+
+function spawnSingleObstacle(typeIndex, offsetX) {
+  const type = OBSTACLE_TYPES[typeIndex];
+  const sx = getSpawnX() + (offsetX || 0);
+  obstacles.push({
+    x: sx,
+    y: GROUND_Y - type.h,
+    w: type.w,
+    h: type.h,
+    color: type.color,
+    triangle: type.triangle || false,
+    circle: type.circle || false,
+    breakable: type.breakable || false,
+    name: type.name,
+  });
+  // Record for coin path — persists even if obstacle is destroyed
+  coinGuides.push({
+    x: sx,
+    y: GROUND_Y - type.h,
+    w: type.w,
+    h: type.h,
+  });
+}
+
+function spawnPit() {
+  const sx = getSpawnX();
+  const isDouble = score > 50 && Math.random() < 0.35;
+  const w = isDouble ? PIT_WIDTH_DOUBLE : PIT_WIDTH_SINGLE;
+  pits.push({ x: sx, w });
+  lastSpawnWidth = w;
+  // Coin guides so coins arc over the pit
+  if (isDouble) {
+    coinGuides.push({ x: sx + w * 0.25 - 10, y: GROUND_Y - 60, w: 20, h: 60 });
+    coinGuides.push({ x: sx + w * 0.75 - 10, y: GROUND_Y - 60, w: 20, h: 60 });
+  } else {
+    coinGuides.push({ x: sx + w / 2 - 10, y: GROUND_Y - 60, w: 20, h: 60 });
+  }
+}
+
+function isOverPit() {
+  const cx = player.x + player.w / 2;
+  for (const pit of pits) {
+    if (cx > pit.x + 10 && cx < pit.x + pit.w - 10) return true;
+  }
+  return false;
+}
+
+function spawnObstacle() {
+  // 15% chance to spawn a pit instead of an obstacle
+  if (score > 15 && Math.random() < 0.15) {
+    spawnPit();
+    return;
+  }
+  // 30% chance to spawn a pattern, 70% single obstacle
+  if (Math.random() < 0.3 && score > 20) {
+    const pattern = PATTERNS[Math.floor(Math.random() * PATTERNS.length)];
+    let maxExtent = 0;
+    for (const p of pattern) {
+      spawnSingleObstacle(p.type, p.offsetX);
+      const ext = p.offsetX + OBSTACLE_TYPES[p.type].w;
+      if (ext > maxExtent) maxExtent = ext;
+    }
+    lastSpawnWidth = maxExtent;
+  } else {
+    const idx = Math.floor(Math.random() * OBSTACLE_TYPES.length);
+    spawnSingleObstacle(idx, 0);
+    lastSpawnWidth = OBSTACLE_TYPES[idx].w;
+  }
+}
+
+function getCoinYForX(cx) {
+  // Compute coin Y using actual jump physics (parabolic arc).
+  // Uses coinGuides (not obstacles) so destroyed obstacles still shape the path.
+
+  const groundPlayerY = GROUND_Y - PLAYER_SIZE;
+  const groundCoinY = groundPlayerY + PLAYER_SIZE / 2 - COIN_SIZE / 2;
+
+  const tPeak = -JUMP_FORCE / GRAVITY;
+  const dxPeak = tPeak * speed;
+
+  let bestY = groundCoinY;
+
+  for (const guide of coinGuides) {
+    const guideCenterX = guide.x + guide.w / 2;
+    const jumpStartX = guideCenterX - dxPeak;
+    const jumpEndX = guideCenterX + dxPeak;
+
+    if (cx >= jumpStartX && cx <= jumpEndX) {
+      const dx = cx - jumpStartX;
+      const t = dx / speed;
+      const playerTopY = groundPlayerY + JUMP_FORCE * t + 0.5 * GRAVITY * t * t;
+      const coinY = playerTopY + PLAYER_SIZE / 2 - COIN_SIZE / 2;
+      if (coinY < bestY) bestY = coinY;
+    }
+  }
+
+  return bestY;
+}
+
+function rectCollision(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function update() {
+  // Game over animation update
+  if (gameState === STATE.GAME_OVER) {
+    gameOverTimer++;
+    deathVY += 0.5;
+    deathY += deathVY;
+    deathRotation += 0.15;
+    return;
+  }
+  if (gameState !== STATE.PLAYING) return;
+
+  frameCount++;
+
+  // Difficulty scaling
+  speed = Math.min(25, baseSpeed + frameCount * 0.003);
+  // Spawn interval: pixel-based clear gap that shrinks over time.
+  // "Clear gap" = empty ground between end of prev hazard and start of next.
+  const desiredClearGap = Math.max(400, 1000 - frameCount * 0.2);
+  // Total spawn distance = clear gap + previous hazard's width
+  spawnInterval = Math.max(20, Math.ceil((desiredClearGap + lastSpawnWidth) / speed));
+
+  // Player physics
+  player.vy += GRAVITY;
+  player.y += player.vy;
+
+  if (player.y >= GROUND_Y - PLAYER_SIZE) {
+    if (fallingIntoPit) {
+      // 이미 낭떠러지에 빠진 상태 — 절대 구출 안 됨
+      player.onGround = false;
+    } else if (isOverPit()) {
+      // 낭떠러지 위에서 지면 높이 도달 → 추락 시작
+      fallingIntoPit = true;
+      player.onGround = false;
+    } else {
+      player.y = GROUND_Y - PLAYER_SIZE;
+      player.vy = 0;
+      player.onGround = true;
+      player.jumpsLeft = 2;
+    }
+  }
+
+  // Fall death (pit)
+  if (player.y > H) {
+    triggerGameOver();
+  }
+
+  // Giant mode timer
+  if (giantMode) {
+    giantTimer--;
+    if (giantTimer <= 0) {
+      giantMode = false;
+      invincible = true;
+      invincibleTimer = INVINCIBLE_DURATION;
+    }
+  }
+
+  // Magnet mode timer
+  if (magnetMode) {
+    magnetTimer--;
+    if (magnetTimer <= 0) {
+      magnetMode = false;
+    }
+  }
+
+  // Post-giant invincibility timer
+  if (invincible) {
+    invincibleTimer--;
+    if (invincibleTimer <= 0) {
+      invincible = false;
+    }
+  }
+
+  // Screen shake timer
+  if (shakeTimer > 0) shakeTimer--;
+
+  // Update pits
+  for (let i = pits.length - 1; i >= 0; i--) {
+    pits[i].x -= speed;
+    if (pits[i].x + pits[i].w < -50) {
+      pits.splice(i, 1);
+    }
+  }
+
+  // Spawn obstacles
+  spawnTimer++;
+  if (spawnTimer >= spawnInterval) {
+    spawnObstacle();
+    spawnTimer = 0;
+  }
+
+  // Update obstacles
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].x -= speed;
+    if (obstacles[i].x + obstacles[i].w < 0) {
+      obstacles.splice(i, 1);
+      continue;
+    }
+
+    // Collision (shrink hitbox slightly for fairness)
+    const shrinkX = obstacles[i].triangle ? 10 : 4;
+    const hitbox = {
+      x: obstacles[i].x + shrinkX,
+      y: obstacles[i].y + 4,
+      w: obstacles[i].w - shrinkX * 2,
+      h: obstacles[i].h - 4,
+    };
+    // Giant mode: enlarged hitbox
+    const pScale = giantMode ? GIANT_SCALE : 1;
+    const pw = player.w * pScale;
+    const ph = player.h * pScale;
+    const px = player.x + (player.w - pw) / 2;
+    const py = player.y + player.h - ph;
+    const playerHitbox = {
+      x: px + 12 * pScale,
+      y: py + 8 * pScale,
+      w: pw - 24 * pScale,
+      h: ph - 12 * pScale,
+    };
+    if (rectCollision(playerHitbox, hitbox)) {
+      if (giantMode) {
+        // Destroy obstacle regardless of breakable
+        for (let k = 0; k < 8; k++) {
+          particles.push({
+            x: obstacles[i].x + obstacles[i].w / 2,
+            y: obstacles[i].y + obstacles[i].h / 2,
+            vx: (Math.random() - 0.5) * 10,
+            vy: -Math.random() * 8 - 2,
+            size: 4 + Math.random() * 7,
+            color: obstacles[i].color,
+            life: 35,
+          });
+        }
+        bonusScore += 10;
+        floatingTexts.push({
+          x: obstacles[i].x + obstacles[i].w / 2,
+          y: obstacles[i].y,
+          text: '+10', life: 40,
+        });
+        shakeTimer = 3;
+        shakeIntensity = 4;
+        obstacles.splice(i, 1);
+      } else if (!invincible) {
+        triggerGameOver();
+      }
+    }
+  }
+
+  // Attack animation update
+  if (isAttacking) {
+    attackTimer++;
+    if (attackTimer >= ATTACK_FRAME_SPEED) {
+      attackTimer = 0;
+      attackFrame++;
+    }
+    const atkFrames = getFrames();
+    const atkLen = atkFrames ? atkFrames.attack.length : 4;
+    if (attackFrame >= atkLen) {
+      isAttacking = false;
+      attackFrame = 0;
+    }
+  }
+
+  // Projectile update
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.speed;
+    p.life--;
+    if (p.x > W || p.life <= 0) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+    // Projectile vs obstacle collision
+    for (let j = obstacles.length - 1; j >= 0; j--) {
+      if (rectCollision(p, obstacles[j])) {
+        // Spawn particles
+        for (let k = 0; k < 6; k++) {
+          particles.push({
+            x: obstacles[j].x + obstacles[j].w / 2,
+            y: obstacles[j].y + obstacles[j].h / 2,
+            vx: (Math.random() - 0.5) * 6,
+            vy: -Math.random() * 5 - 2,
+            size: 3 + Math.random() * 5,
+            color: obstacles[j].color,
+            life: 30,
+          });
+        }
+        bonusScore += 5;
+        obstacles.splice(j, 1);
+        projectiles.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  // Particle update
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.3;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Move coinGuides (in sync with obstacles, but never removed by destruction)
+  for (let i = coinGuides.length - 1; i >= 0; i--) {
+    coinGuides[i].x -= speed;
+    if (coinGuides[i].x + coinGuides[i].w < -300) coinGuides.splice(i, 1);
+  }
+
+  // Coin spawn (continuous guide line) — spawned far off-screen
+  coinTimer++;
+  if (coinTimer >= COIN_GAP) {
+    coinTimer = 0;
+    const sx = getSpawnX();
+    coins.push({
+      x: sx,
+      y: getCoinYForX(sx),
+      w: COIN_SIZE, h: COIN_SIZE,
+    });
+  }
+
+  // Coin update — adjust Y only while off-screen, freeze once visible
+  const cScale = giantMode ? GIANT_SCALE : 1;
+  const cpw = player.w * cScale;
+  const cph = player.h * cScale;
+  const cpx = player.x + (player.w - cpw) / 2;
+  const cpy = player.y + player.h - cph;
+  const playerHitboxCoin = {
+    x: cpx + 8 * cScale, y: cpy + 4 * cScale,
+    w: cpw - 16 * cScale, h: cph - 8 * cScale,
+  };
+  for (let i = coins.length - 1; i >= 0; i--) {
+    coins[i].x -= speed;
+    // Recalculate Y only while off-screen — once on screen, position is locked
+    if (coins[i].x > W) {
+      coins[i].y = getCoinYForX(coins[i].x);
+    }
+    if (coins[i].x + coins[i].w < 0) {
+      coins.splice(i, 1);
+      continue;
+    }
+    // Magnet attraction: pull on-screen coins toward the player
+    if (magnetMode && coins[i].x <= W) {
+      const coinCX = coins[i].x + coins[i].w / 2;
+      const coinCY = coins[i].y + coins[i].h / 2;
+      const playerCX = cpx + cpw / 2;
+      const playerCY = cpy + cph / 2;
+      const dx = playerCX - coinCX;
+      const dy = playerCY - coinCY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < MAGNET_RANGE && dist > 0) {
+        coins[i].x += (dx / dist) * MAGNET_SPEED;
+        coins[i].y += (dy / dist) * MAGNET_SPEED;
+      }
+    }
+    if (rectCollision(playerHitboxCoin, coins[i])) {
+      // Collect!
+      bonusScore += 5;
+      // Gold particles
+      for (let k = 0; k < 3; k++) {
+        particles.push({
+          x: coins[i].x + 8, y: coins[i].y + 8,
+          vx: (Math.random() - 0.5) * 4,
+          vy: -Math.random() * 3 - 1,
+          size: 2 + Math.random() * 3,
+          color: '#FFD700',
+          life: 20,
+        });
+      }
+      // Floating text
+      floatingTexts.push({
+        x: coins[i].x + 8, y: coins[i].y,
+        text: '+5', life: 40,
+      });
+      coins.splice(i, 1);
+    }
+  }
+
+  // Item spawn
+  itemSpawnTimer++;
+  if (itemSpawnTimer >= nextItemSpawn) {
+    itemSpawnTimer = 0;
+    nextItemSpawn = ITEM_SPAWN_MIN + Math.floor(Math.random() * (ITEM_SPAWN_MAX - ITEM_SPAWN_MIN));
+    const sx = getSpawnX();
+    items.push({
+      x: sx,
+      y: getCoinYForX(sx),
+      w: 28, h: 28,
+      rotation: 0,
+      type: Math.random() < 0.5 ? 'giant' : 'magnet',
+    });
+  }
+
+  // Item update
+  const pScaleItem = giantMode ? GIANT_SCALE : 1;
+  const ipw = player.w * pScaleItem;
+  const iph = player.h * pScaleItem;
+  const ipx = player.x + (player.w - ipw) / 2;
+  const ipy = player.y + player.h - iph;
+  const playerHitboxItem = {
+    x: ipx + 8 * pScaleItem,
+    y: ipy + 4 * pScaleItem,
+    w: ipw - 16 * pScaleItem,
+    h: iph - 8 * pScaleItem,
+  };
+  for (let i = items.length - 1; i >= 0; i--) {
+    items[i].x -= speed;
+    items[i].rotation += 0.05;
+    // Recalculate Y while off-screen
+    if (items[i].x > W) {
+      items[i].y = getCoinYForX(items[i].x);
+    }
+    if (items[i].x + items[i].w < 0) {
+      items.splice(i, 1);
+      continue;
+    }
+    if (rectCollision(playerHitboxItem, items[i])) {
+      if (items[i].type === 'magnet') {
+        magnetMode = true;
+        magnetTimer = MAGNET_DURATION;
+        // Blue particle burst
+        for (let k = 0; k < 12; k++) {
+          particles.push({
+            x: items[i].x + 14, y: items[i].y + 14,
+            vx: (Math.random() - 0.5) * 8,
+            vy: (Math.random() - 0.5) * 8,
+            size: 3 + Math.random() * 5,
+            color: ['#00BFFF', '#1E90FF', '#4169E1', '#00CED1'][Math.floor(Math.random() * 4)],
+            life: 30,
+          });
+        }
+        floatingTexts.push({
+          x: items[i].x + 14, y: items[i].y - 10,
+          text: 'MAGNET!', life: 60,
+        });
+      } else {
+        giantMode = true;
+        giantTimer = GIANT_DURATION;
+        // Particle burst
+        for (let k = 0; k < 12; k++) {
+          particles.push({
+            x: items[i].x + 14, y: items[i].y + 14,
+            vx: (Math.random() - 0.5) * 8,
+            vy: (Math.random() - 0.5) * 8,
+            size: 3 + Math.random() * 5,
+            color: ['#FFD700', '#FF4500', '#FFA500', '#FFFF00'][Math.floor(Math.random() * 4)],
+            life: 30,
+          });
+        }
+        floatingTexts.push({
+          x: items[i].x + 14, y: items[i].y - 10,
+          text: 'GIANT!', life: 60,
+        });
+      }
+      items.splice(i, 1);
+    }
+  }
+
+  // Floating text update
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    floatingTexts[i].y -= 1.5;
+    floatingTexts[i].life--;
+    if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+  }
+
+  // Score
+  score = Math.floor(frameCount * 0.1) + bonusScore;
+
+  // Replenish attack charges every 1000 points
+  const chargeThreshold = Math.floor(score / 1000) * 1000;
+  if (chargeThreshold > lastChargeScore) {
+    attackCharges += 5;
+    lastChargeScore = chargeThreshold;
+    floatingTexts.push({
+      x: 60, y: 50,
+      text: '⚡+5', life: 60,
+    });
+  }
+
+  // Clouds
+  for (const cloud of clouds) {
+    cloud.x -= cloud.speed;
+    if (cloud.x + cloud.r < 0) {
+      cloud.x = W + cloud.r;
+      cloud.y = 30 + Math.random() * 80;
+    }
+  }
+
+  // Road offset
+  roadOffset = (roadOffset + speed) % 40;
+}
+
+function drawBackground() {
+  const theme = getTheme();
+
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  grad.addColorStop(0, theme.sky1);
+  grad.addColorStop(1, theme.sky2);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+
+  // Clouds
+  ctx.fillStyle = theme.cloud;
+  for (const cloud of clouds) {
+    ctx.beginPath();
+    ctx.arc(cloud.x, cloud.y, cloud.r, 0, Math.PI * 2);
+    ctx.arc(cloud.x + cloud.r * 0.8, cloud.y - cloud.r * 0.2, cloud.r * 0.7, 0, Math.PI * 2);
+    ctx.arc(cloud.x - cloud.r * 0.6, cloud.y + cloud.r * 0.1, cloud.r * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Ground
+  ctx.fillStyle = theme.ground;
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+
+  // Road dashes
+  ctx.strokeStyle = theme.road;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([20, 20]);
+  ctx.lineDashOffset = -roadOffset;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y + 30);
+  ctx.lineTo(W, GROUND_Y + 30);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Draw pits (overdraw ground + dashes)
+  for (const pit of pits) {
+    if (pit.x >= W || pit.x + pit.w <= 0) continue;
+    const left = Math.max(0, pit.x);
+    const right = Math.min(W, pit.x + pit.w);
+    const pw = right - left;
+    const depth = H - GROUND_Y;
+    const wallW = 16;
+
+    // Deep abyss background — dark gradient for depth
+    const abyssGrad = ctx.createLinearGradient(0, GROUND_Y, 0, H);
+    abyssGrad.addColorStop(0, '#3a5a6a');
+    abyssGrad.addColorStop(0.4, '#2a3a4a');
+    abyssGrad.addColorStop(1, '#0a0a1a');
+    ctx.fillStyle = abyssGrad;
+    ctx.fillRect(left, GROUND_Y, pw, depth);
+
+    // Scattered rocks inside the pit
+    ctx.fillStyle = '#3a3a3a';
+    const pitMid = (left + right) / 2;
+    ctx.beginPath();
+    ctx.moveTo(pitMid - 12, H - 8);
+    ctx.lineTo(pitMid - 5, H - 18);
+    ctx.lineTo(pitMid + 3, H - 12);
+    ctx.lineTo(pitMid + 8, H - 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#2a2a2a';
+    ctx.beginPath();
+    ctx.moveTo(pitMid + 15, H - 4);
+    ctx.lineTo(pitMid + 22, H - 14);
+    ctx.lineTo(pitMid + 30, H - 6);
+    ctx.closePath();
+    ctx.fill();
+
+    // Depth fog (thicker, layered)
+    const fogGrad = ctx.createLinearGradient(0, H - 30, 0, H);
+    fogGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    fogGrad.addColorStop(0.5, 'rgba(10,10,30,0.3)');
+    fogGrad.addColorStop(1, 'rgba(0,0,0,0.7)');
+    ctx.fillStyle = fogGrad;
+    ctx.fillRect(left, H - 30, pw, 30);
+
+    // Horizontal depth lines (crevice feel)
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    for (let dy = GROUND_Y + 10; dy < H - 15; dy += 12) {
+      ctx.beginPath();
+      ctx.moveTo(left + 5, dy);
+      ctx.lineTo(right - 5, dy + 2);
+      ctx.stroke();
+    }
+
+    // Helper: draw cliff wall
+    function drawCliffWall(wx, isLeft) {
+      // Asphalt cap
+      ctx.fillStyle = '#606060';
+      ctx.fillRect(wx, GROUND_Y, wallW, 5);
+      // Asphalt detail lines
+      ctx.strokeStyle = '#505050';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(wx + 2, GROUND_Y + 2);
+      ctx.lineTo(wx + wallW - 2, GROUND_Y + 3);
+      ctx.stroke();
+
+      // Dirt/soil layer
+      const dirtGrad = ctx.createLinearGradient(0, GROUND_Y + 5, 0, GROUND_Y + 20);
+      dirtGrad.addColorStop(0, '#9B8342');
+      dirtGrad.addColorStop(1, '#7A6828');
+      ctx.fillStyle = dirtGrad;
+      ctx.fillRect(wx, GROUND_Y + 5, wallW, 15);
+      // Dirt texture dots
+      ctx.fillStyle = '#B09848';
+      const dotSeed = isLeft ? 0 : 5;
+      ctx.fillRect(wx + 2 + dotSeed % 4, GROUND_Y + 7, 2, 2);
+      ctx.fillRect(wx + 7 + dotSeed % 3, GROUND_Y + 11, 2, 2);
+      ctx.fillRect(wx + 4 + dotSeed % 5, GROUND_Y + 15, 2, 2);
+      ctx.fillStyle = '#6A5818';
+      ctx.fillRect(wx + 10, GROUND_Y + 9, 2, 1);
+      ctx.fillRect(wx + 3, GROUND_Y + 14, 1, 2);
+      // Small root
+      ctx.strokeStyle = '#5a4a20';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(wx + (isLeft ? wallW : 0), GROUND_Y + 10);
+      ctx.quadraticCurveTo(wx + (isLeft ? wallW + 4 : -4), GROUND_Y + 15, wx + (isLeft ? wallW + 2 : -2), GROUND_Y + 18);
+      ctx.stroke();
+
+      // Rock layer (gradient)
+      const rg = ctx.createLinearGradient(wx, 0, wx + wallW, 0);
+      if (isLeft) {
+        rg.addColorStop(0, '#5C4C3C');
+        rg.addColorStop(1, '#7A6A58');
+      } else {
+        rg.addColorStop(0, '#7A6A58');
+        rg.addColorStop(1, '#5C4C3C');
+      }
+      ctx.fillStyle = rg;
+      ctx.fillRect(wx, GROUND_Y + 20, wallW, depth - 20);
+
+      // Rock strata lines (varied spacing for realism)
+      ctx.lineWidth = 1;
+      const strataSpacings = [8, 11, 7, 10, 9, 12];
+      let ly = GROUND_Y + 24;
+      let si = 0;
+      while (ly < H - 8) {
+        ctx.strokeStyle = si % 2 === 0 ? '#4A3A2A' : '#5A4A38';
+        ctx.beginPath();
+        ctx.moveTo(wx + 1, ly);
+        ctx.lineTo(wx + wallW - 1, ly + (isLeft ? 1 : -1));
+        ctx.stroke();
+        ly += strataSpacings[si % strataSpacings.length];
+        si++;
+      }
+
+      // Embedded pebbles in rock
+      ctx.fillStyle = '#6a5a4a';
+      ctx.beginPath();
+      ctx.arc(wx + 5, GROUND_Y + 30, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#8a7a6a';
+      ctx.beginPath();
+      ctx.arc(wx + 10, GROUND_Y + 45, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#5a4a3a';
+      ctx.beginPath();
+      ctx.arc(wx + 4, GROUND_Y + depth * 0.6, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Crumble overhang (jagged edge)
+      ctx.fillStyle = '#706050';
+      if (isLeft) {
+        ctx.fillRect(wx + wallW, GROUND_Y, 6, 3);
+        ctx.fillRect(wx + wallW + 1, GROUND_Y + 3, 4, 2);
+        ctx.fillRect(wx + wallW + 3, GROUND_Y + 5, 2, 2);
+        // Falling pebble dots
+        ctx.fillStyle = '#8a7a5a';
+        ctx.fillRect(wx + wallW + 5, GROUND_Y + 10, 2, 2);
+        ctx.fillRect(wx + wallW + 3, GROUND_Y + 16, 1, 1);
+      } else {
+        ctx.fillRect(wx - 6, GROUND_Y, 6, 3);
+        ctx.fillRect(wx - 5, GROUND_Y + 3, 4, 2);
+        ctx.fillRect(wx - 3, GROUND_Y + 5, 2, 2);
+        ctx.fillStyle = '#8a7a5a';
+        ctx.fillRect(wx - 5, GROUND_Y + 10, 2, 2);
+        ctx.fillRect(wx - 3, GROUND_Y + 16, 1, 1);
+      }
+
+      // Warning stripe + sign
+      const signX = isLeft ? wx - 6 : wx + wallW + 2;
+      ctx.fillStyle = '#E07020';
+      ctx.fillRect(signX, GROUND_Y - 8, 4, 12);
+      // Yellow/black caution stripe on ground edge
+      ctx.fillStyle = '#FFD700';
+      const edgeX = isLeft ? wx + wallW - 2 : wx;
+      ctx.fillRect(edgeX, GROUND_Y - 2, 4, 2);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(edgeX + 1, GROUND_Y - 2, 2, 1);
+    }
+
+    // Left cliff
+    if (pit.x > 0) {
+      drawCliffWall(left, true);
+    }
+    // Right cliff
+    if (pit.x + pit.w < W) {
+      drawCliffWall(right - wallW, false);
+    }
+  }
+}
+
+// Per-character draw configs: [offX, offY, drawW, drawH] relative to player
+// drawH controls sprite height (extends upward from feet)
+// offX shifts sprite horizontally (negative = left)
+const DRAW_CONFIG = {
+  powercat: {
+    run:     { offX: -5, drawH: 68 },
+    jump:    { offX: -4, drawH: 78 },
+    attack:  { offX: -5, drawH: 65 },
+    damaged: { offX: -2, drawH: 66 },
+  },
+  hongsi: {
+    run:     { offX: -4, drawH: 60 },
+    jump:    { offX: 0,  drawH: 80 },
+    attack:  { offX: -3, drawH: 70 },
+    damaged: { offX: 0,  drawH: 62 },
+  },
+};
+
+function drawPlayerSprite() {
+  const F = getFrames();
+  if (!F) return;
+  const charType = CHARACTERS[selectedChar].type;
+  const cfg = DRAW_CONFIG[charType];
+  if (!cfg) return;
+
+  animTimer++;
+  if (animTimer >= ANIM_SPEED) {
+    animTimer = 0;
+    animFrame++;
+  }
+
+  let frames = F.run;
+  let dc = cfg.run;
+  if (gameState === STATE.GAME_OVER) { frames = F.damaged; animFrame = 0; dc = cfg.damaged; }
+  else if (isAttacking) { frames = F.attack; dc = cfg.attack; }
+  else if (!player.onGround) { frames = F.jump; dc = cfg.jump; }
+
+  const idx = (isAttacking ? attackFrame : animFrame) % frames.length;
+  const img = frames[idx];
+  if (spritesLoaded >= spritesTotal && img && img.complete) {
+    const aspect = img.naturalWidth / img.naturalHeight;
+    const dh = dc.drawH;
+    const dw = dh * aspect;
+
+    // Bottom-align: sprite feet always at player bottom
+    const dx = player.x + (player.w - dw) / 2 + (dc.offX || 0);
+    const dy = player.y + player.h - dh;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  } else {
+    ctx.fillStyle = CHARACTERS[selectedChar].color;
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+  }
+}
+
+
+function drawPlayer() {
+  if (gameState === STATE.GAME_OVER) {
+    // Death animation: character flies up, rotates, and falls off screen
+    ctx.save();
+    const cx = deathX + player.w / 2;
+    const cy = deathY + player.h / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate(deathRotation);
+    ctx.translate(-cx, -cy);
+    // Temporarily override player position for sprite drawing
+    const origY = player.y;
+    player.y = deathY;
+    drawPlayerSprite();
+    player.y = origY;
+    ctx.restore();
+    return;
+  }
+  if (giantMode) {
+    ctx.save();
+    // Scale around player center-bottom
+    const cx = player.x + player.w / 2;
+    const bottom = player.y + player.h;
+    ctx.translate(cx, bottom);
+    ctx.scale(GIANT_SCALE, GIANT_SCALE);
+    ctx.translate(-cx, -bottom);
+
+    // Gold aura
+    const auraPulse = 0.2 + Math.sin(frameCount * 0.15) * 0.1;
+    ctx.fillStyle = `rgba(255, 215, 0, ${auraPulse})`;
+    ctx.beginPath();
+    ctx.arc(player.x + player.w / 2, player.y + player.h / 2, player.w * 0.7, 0, Math.PI * 2);
+    ctx.fill();
+
+    drawPlayerSprite();
+    ctx.restore();
+  } else if (invincible) {
+    // Blink: skip drawing every other 4 frames
+    if (Math.floor(frameCount / 4) % 2 === 0) {
+      drawPlayerSprite();
+    }
+  } else {
+    drawPlayerSprite();
+  }
+}
+
+function drawObstacles() {
+  for (const obs of obstacles) {
+    ctx.fillStyle = obs.color;
+
+    if (obs.triangle) {
+      // ── 송전탑 / 대형송전탑 ──
+      // Lattice body (two legs)
+      const midX = obs.x + obs.w / 2;
+      const legW = obs.w * 0.12;
+      // Left leg
+      ctx.fillStyle = obs.color;
+      ctx.beginPath();
+      ctx.moveTo(midX - legW, obs.y + obs.h * 0.15);
+      ctx.lineTo(obs.x, obs.y + obs.h);
+      ctx.lineTo(obs.x + legW * 2, obs.y + obs.h);
+      ctx.lineTo(midX - legW * 0.3, obs.y + obs.h * 0.15);
+      ctx.closePath();
+      ctx.fill();
+      // Right leg
+      ctx.beginPath();
+      ctx.moveTo(midX + legW * 0.3, obs.y + obs.h * 0.15);
+      ctx.lineTo(obs.x + obs.w - legW * 2, obs.y + obs.h);
+      ctx.lineTo(obs.x + obs.w, obs.y + obs.h);
+      ctx.lineTo(midX + legW, obs.y + obs.h * 0.15);
+      ctx.closePath();
+      ctx.fill();
+      // Top head section (wider cap)
+      const headH = obs.h * 0.18;
+      const headW = obs.w * 0.35;
+      ctx.fillStyle = '#555';
+      ctx.fillRect(midX - headW / 2, obs.y, headW, headH);
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(midX - headW / 2, obs.y, headW, headH);
+      // Cross beams (horizontal lattice bars)
+      ctx.strokeStyle = '#6a6a6a';
+      ctx.lineWidth = 1.5;
+      const beamCount = obs.h > 90 ? 5 : 3;
+      for (let b = 1; b <= beamCount; b++) {
+        const ratio = 0.2 + (b / (beamCount + 1)) * 0.75;
+        const gy = obs.y + obs.h * ratio;
+        // Width at this height (narrows toward top)
+        const wAtH = obs.w * (1 - (1 - ratio) * 0.6);
+        const lx = midX - wAtH / 2;
+        const rx = midX + wAtH / 2;
+        ctx.beginPath();
+        ctx.moveTo(lx, gy);
+        ctx.lineTo(rx, gy);
+        ctx.stroke();
+      }
+      // X bracing between legs
+      ctx.strokeStyle = '#5a5a5a';
+      ctx.lineWidth = 1;
+      const sections = obs.h > 90 ? 3 : 2;
+      for (let s = 0; s < sections; s++) {
+        const t1 = 0.3 + (s / sections) * 0.6;
+        const t2 = 0.3 + ((s + 1) / sections) * 0.6;
+        const y1 = obs.y + obs.h * t1;
+        const y2 = obs.y + obs.h * t2;
+        const w1 = obs.w * (1 - (1 - t1) * 0.6);
+        const w2 = obs.w * (1 - (1 - t2) * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(midX - w1 / 2, y1);
+        ctx.lineTo(midX + w2 / 2, y2);
+        ctx.moveTo(midX + w1 / 2, y1);
+        ctx.lineTo(midX - w2 / 2, y2);
+        ctx.stroke();
+      }
+      // Insulators (hanging from top arms)
+      const armY = obs.y + headH;
+      const armSpan = obs.w * 0.55;
+      ctx.strokeStyle = '#999';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(midX - armSpan / 2, armY);
+      ctx.lineTo(midX + armSpan / 2, armY);
+      ctx.stroke();
+      // Insulator discs (blue ceramic)
+      ctx.fillStyle = '#4a90d9';
+      const insulatorPositions = [-armSpan / 2, -armSpan / 4, armSpan / 4, armSpan / 2];
+      for (const ip of insulatorPositions) {
+        ctx.fillRect(midX + ip - 2, armY + 1, 4, 5);
+        ctx.fillStyle = '#6ab0e9';
+        ctx.fillRect(midX + ip - 1, armY + 2, 2, 2);
+        ctx.fillStyle = '#4a90d9';
+      }
+      // Power lines (drooping wires from insulators)
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      for (const ip of [insulatorPositions[0], insulatorPositions[3]]) {
+        ctx.beginPath();
+        ctx.moveTo(midX + ip, armY + 6);
+        ctx.quadraticCurveTo(midX + ip + (ip > 0 ? 15 : -15), armY + 20, midX + ip + (ip > 0 ? 30 : -30), armY + 10);
+        ctx.stroke();
+      }
+      // Base plates (feet)
+      ctx.fillStyle = '#4a4a4a';
+      ctx.fillRect(obs.x - 3, obs.y + obs.h - 4, legW * 2 + 6, 4);
+      ctx.fillRect(obs.x + obs.w - legW * 2 - 3, obs.y + obs.h - 4, legW * 2 + 6, 4);
+
+    } else if (obs.circle) {
+      // 전선릴 — 원형
+      const cx = obs.x + obs.w / 2;
+      const cy = obs.y + obs.h / 2;
+      const r = obs.w / 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Inner circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+      ctx.strokeStyle = '#777';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // Spokes
+      for (let a = 0; a < 4; a++) {
+        const angle = (a / 4) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * r * 0.5, cy + Math.sin(angle) * r * 0.5);
+        ctx.lineTo(cx + Math.cos(angle) * r * 0.9, cy + Math.sin(angle) * r * 0.9);
+        ctx.stroke();
+      }
+
+    } else {
+      // 사각형 계열 — 공통 박스
+      ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+
+      if (obs.name === '배전함' || obs.name === '이중배전함') {
+        ctx.strokeStyle = '#999';
+        ctx.lineWidth = 1;
+        if (obs.name === '이중배전함') {
+          ctx.strokeRect(obs.x + 4, obs.y + 4, obs.w / 2 - 6, obs.h - 8);
+          ctx.strokeRect(obs.x + obs.w / 2 + 2, obs.y + 4, obs.w / 2 - 6, obs.h - 8);
+          ctx.fillStyle = '#FFD700';
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('\u26A1', obs.x + obs.w / 2, obs.y + obs.h / 2 + 4);
+        } else {
+          ctx.strokeRect(obs.x + 5, obs.y + 5, obs.w - 10, obs.h - 10);
+        }
+      }
+
+      if (obs.name === '전봇대' || obs.name === '높은전봇대') {
+        // ── 전봇대 디테일 ──
+        // Wood grain texture (vertical lines)
+        ctx.strokeStyle = '#9a8a6a';
+        ctx.lineWidth = 0.5;
+        for (let gx = obs.x + 3; gx < obs.x + obs.w - 2; gx += 4) {
+          ctx.beginPath();
+          ctx.moveTo(gx, obs.y + 2);
+          ctx.lineTo(gx + 1, obs.y + obs.h - 2);
+          ctx.stroke();
+        }
+        // Knot holes
+        ctx.fillStyle = '#6a5a3a';
+        ctx.beginPath();
+        ctx.ellipse(obs.x + obs.w / 2, obs.y + obs.h * 0.4, 3, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        if (obs.h > 70) {
+          ctx.beginPath();
+          ctx.ellipse(obs.x + obs.w / 2 - 1, obs.y + obs.h * 0.7, 2, 1.5, 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Metal band (around pole)
+        ctx.fillStyle = '#888';
+        ctx.fillRect(obs.x - 1, obs.y + obs.h * 0.3, obs.w + 2, 3);
+        if (obs.h > 70) {
+          ctx.fillRect(obs.x - 1, obs.y + obs.h * 0.6, obs.w + 2, 3);
+        }
+        // Top cap
+        ctx.fillStyle = '#666';
+        ctx.fillRect(obs.x - 2, obs.y - 3, obs.w + 4, 5);
+        // Cross arm (main)
+        ctx.fillStyle = '#7a7a7a';
+        ctx.fillRect(obs.x - 14, obs.y + 4, obs.w + 28, 4);
+        // Insulators on cross arm
+        ctx.fillStyle = '#4a90d9';
+        ctx.fillRect(obs.x - 12, obs.y + 0, 4, 6);
+        ctx.fillRect(obs.x + obs.w + 8, obs.y + 0, 4, 6);
+        // Insulator caps (white ceramic)
+        ctx.fillStyle = '#c8d8e8';
+        ctx.fillRect(obs.x - 13, obs.y - 1, 6, 2);
+        ctx.fillRect(obs.x + obs.w + 7, obs.y - 1, 6, 2);
+        // Wires hanging from insulators
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(obs.x - 10, obs.y + 6);
+        ctx.quadraticCurveTo(obs.x - 25, obs.y + 18, obs.x - 35, obs.y + 12);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(obs.x + obs.w + 10, obs.y + 6);
+        ctx.quadraticCurveTo(obs.x + obs.w + 25, obs.y + 18, obs.x + obs.w + 35, obs.y + 12);
+        ctx.stroke();
+        if (obs.name === '높은전봇대') {
+          // Second cross arm (lower)
+          ctx.fillStyle = '#7a7a7a';
+          ctx.fillRect(obs.x - 11, obs.y + 22, obs.w + 22, 4);
+          // Insulators
+          ctx.fillStyle = '#4a90d9';
+          ctx.fillRect(obs.x - 9, obs.y + 18, 4, 6);
+          ctx.fillRect(obs.x + obs.w + 5, obs.y + 18, 4, 6);
+          // Transformer box on pole
+          ctx.fillStyle = '#5a5a5a';
+          ctx.fillRect(obs.x - 4, obs.y + obs.h * 0.45, obs.w + 8, 12);
+          ctx.strokeStyle = '#444';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(obs.x - 4, obs.y + obs.h * 0.45, obs.w + 8, 12);
+        }
+      }
+
+      if (obs.name === '공사바리케이드') {
+        ctx.fillStyle = '#FFF';
+        const stripeW = 10;
+        for (let sx = 0; sx < obs.w; sx += stripeW * 2) {
+          ctx.fillRect(obs.x + sx, obs.y, Math.min(stripeW, obs.w - sx), obs.h);
+        }
+        ctx.strokeStyle = '#C05010';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+        ctx.fillStyle = '#C05010';
+        ctx.fillRect(obs.x + 5, obs.y + obs.h, 4, 8);
+        ctx.fillRect(obs.x + obs.w - 9, obs.y + obs.h, 4, 8);
+      }
+
+      if (obs.name === '변압기') {
+        ctx.fillStyle = '#3a6a3a';
+        ctx.fillRect(obs.x + 4, obs.y + 4, obs.w - 8, obs.h * 0.4);
+        ctx.strokeStyle = '#5a9a5a';
+        ctx.lineWidth = 1;
+        for (let ly = obs.y + obs.h * 0.5; ly < obs.y + obs.h - 4; ly += 6) {
+          ctx.beginPath();
+          ctx.moveTo(obs.x + 3, ly);
+          ctx.lineTo(obs.x + obs.w - 3, ly);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(obs.x + 8, obs.y - 8, 5, 10);
+        ctx.fillRect(obs.x + obs.w - 13, obs.y - 8, 5, 10);
+      }
+
+      // ── 건전지 (Battery) ──
+      if (obs.name === '건전지') {
+        // Battery body gradient
+        const batGrad = ctx.createLinearGradient(obs.x, 0, obs.x + obs.w, 0);
+        batGrad.addColorStop(0, '#3a3a3a');
+        batGrad.addColorStop(0.4, '#555');
+        batGrad.addColorStop(0.6, '#555');
+        batGrad.addColorStop(1, '#2a2a2a');
+        ctx.fillStyle = batGrad;
+        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+        // Positive terminal (top nub)
+        ctx.fillStyle = '#888';
+        ctx.fillRect(obs.x + obs.w * 0.3, obs.y - 5, obs.w * 0.4, 6);
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(obs.x + obs.w * 0.3, obs.y - 5, obs.w * 0.4, 6);
+        // Gold ring at top
+        ctx.fillStyle = '#C8A832';
+        ctx.fillRect(obs.x + 1, obs.y + 1, obs.w - 2, 4);
+        // Label area (colored band)
+        const labelY = obs.y + obs.h * 0.25;
+        const labelH = obs.h * 0.45;
+        ctx.fillStyle = '#D4371C';
+        ctx.fillRect(obs.x + 2, labelY, obs.w - 4, labelH);
+        // "+" symbol
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('+', obs.x + obs.w / 2, labelY + labelH * 0.4);
+        // "-" at bottom
+        ctx.fillStyle = '#999';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.fillText('−', obs.x + obs.w / 2, obs.y + obs.h - 4);
+        // Bottom metal plate
+        ctx.fillStyle = '#777';
+        ctx.fillRect(obs.x + 2, obs.y + obs.h - 3, obs.w - 4, 3);
+        // Shine highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.fillRect(obs.x + 2, obs.y + 2, obs.w * 0.3, obs.h - 6);
+      }
+
+      // ── 지상개폐기 (Ground Switchgear) ──
+      if (obs.name === '지상개폐기') {
+        // Metal body gradient
+        const sgGrad = ctx.createLinearGradient(0, obs.y, 0, obs.y + obs.h);
+        sgGrad.addColorStop(0, '#6a7a6a');
+        sgGrad.addColorStop(1, '#4a5a4a');
+        ctx.fillStyle = sgGrad;
+        ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+        // Dark border
+        ctx.strokeStyle = '#3a4a3a';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+        // Door panel (front face)
+        ctx.strokeStyle = '#5a6a5a';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(obs.x + 4, obs.y + 4, obs.w - 8, obs.h - 8);
+        // Door handle
+        ctx.fillStyle = '#888';
+        ctx.fillRect(obs.x + obs.w - 10, obs.y + obs.h / 2 - 4, 4, 8);
+        // Lock
+        ctx.fillStyle = '#666';
+        ctx.beginPath();
+        ctx.arc(obs.x + obs.w - 8, obs.y + obs.h / 2 + 8, 2, 0, Math.PI * 2);
+        ctx.fill();
+        // Warning sticker (yellow triangle)
+        const wx = obs.x + 10;
+        const wy = obs.y + 8;
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.moveTo(wx + 8, wy);
+        ctx.lineTo(wx + 16, wy + 14);
+        ctx.lineTo(wx, wy + 14);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Lightning bolt in warning
+        ctx.fillStyle = '#333';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('\u26A1', wx + 8, wy + 12);
+        // Ventilation slits
+        ctx.strokeStyle = '#4a5a4a';
+        ctx.lineWidth = 1;
+        for (let sy = obs.y + obs.h - 14; sy < obs.y + obs.h - 4; sy += 4) {
+          ctx.beginPath();
+          ctx.moveTo(obs.x + 6, sy);
+          ctx.lineTo(obs.x + 18, sy);
+          ctx.stroke();
+        }
+        // Base plate (slightly wider)
+        ctx.fillStyle = '#4a4a4a';
+        ctx.fillRect(obs.x - 3, obs.y + obs.h - 3, obs.w + 6, 4);
+        // Cable entry (side bumps)
+        ctx.fillStyle = '#555';
+        ctx.fillRect(obs.x - 4, obs.y + 6, 5, 6);
+        ctx.fillRect(obs.x + obs.w - 1, obs.y + 6, 5, 6);
+      }
+    }
+
+    // Unbreakable indicator — metallic shine on top
+    if (!obs.breakable) {
+      ctx.strokeStyle = 'rgba(255, 50, 50, 0.7)';
+      ctx.lineWidth = 2;
+      const cx = obs.x + obs.w / 2;
+      const cy = obs.y + (obs.triangle ? obs.h * 0.4 : obs.h / 2);
+      ctx.beginPath();
+      ctx.moveTo(cx - 6, cy - 6);
+      ctx.lineTo(cx + 6, cy + 6);
+      ctx.moveTo(cx + 6, cy - 6);
+      ctx.lineTo(cx - 6, cy + 6);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawProjectiles() {
+  for (const p of projectiles) {
+    // Glow
+    ctx.shadowColor = '#FFD700';
+    ctx.shadowBlur = 12;
+    // Electric ball
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.ellipse(p.x + p.w / 2, p.y + p.h / 2, p.w / 2, p.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Inner bright core
+    ctx.fillStyle = '#FFF';
+    ctx.beginPath();
+    ctx.ellipse(p.x + p.w / 2, p.y + p.h / 2, p.w / 4, p.h / 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // Lightning bolt symbol
+    ctx.fillStyle = '#B8860B';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u26A1', p.x + p.w / 2, p.y + p.h / 2 + 5);
+    // Trail
+    ctx.fillStyle = 'rgba(255, 215, 0, 0.3)';
+    ctx.beginPath();
+    ctx.ellipse(p.x - 5, p.y + p.h / 2, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const alpha = p.life / 30;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawItems() {
+  for (const item of items) {
+    const cx = item.x + item.w / 2;
+    const cy = item.y + item.h / 2;
+    const pulse = 1 + Math.sin(frameCount * 0.1) * 0.15;
+    const r = (item.w / 2) * pulse;
+
+    if (item.type === 'magnet') {
+      // Magnet item — blue glow
+      ctx.shadowColor = '#1E90FF';
+      ctx.shadowBlur = 16;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(item.rotation);
+
+      // Body - blue gradient
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      const t = (Math.sin(frameCount * 0.08) + 1) / 2;
+      grad.addColorStop(0, '#00FFFF');
+      grad.addColorStop(0.5, t > 0.5 ? '#1E90FF' : '#00BFFF');
+      grad.addColorStop(1, '#0040FF');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 'U' magnet icon
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#FFF';
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('U', 0, 1);
+      ctx.textBaseline = 'alphabetic';
+
+      ctx.restore();
+
+      // Edge glow ring — blue
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(30, 144, 255, ${0.4 + pulse * 0.3})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      // Giant item — red/gold glow (original)
+      ctx.shadowColor = '#FF4500';
+      ctx.shadowBlur = 16;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(item.rotation);
+
+      // Body - red/gold gradient
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      const t = (Math.sin(frameCount * 0.08) + 1) / 2;
+      grad.addColorStop(0, '#FFFF00');
+      grad.addColorStop(0.5, t > 0.5 ? '#FF4500' : '#FFD700');
+      grad.addColorStop(1, '#FF2200');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Lightning bolt icon
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#FFF';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('\u26A1', 0, 1);
+      ctx.textBaseline = 'alphabetic';
+
+      ctx.restore();
+
+      // Edge glow ring
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(255, 200, 0, ${0.4 + pulse * 0.3})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.shadowBlur = 0;
+}
+
+function drawCoins() {
+  for (const c of coins) {
+    const pulse = 1 + Math.sin(frameCount * 0.15 + c.x * 0.05) * 0.12;
+    const r = (c.w / 2) * pulse;
+    const cx = c.x + c.w / 2;
+    const cy = c.y + c.h / 2;
+
+    // Glow
+    ctx.shadowColor = '#FFD700';
+    ctx.shadowBlur = 6;
+
+    // Coin body
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Darker edge
+    ctx.strokeStyle = '#B8860B';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+
+    // Inner ring
+    ctx.strokeStyle = '#DAA520';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Highlight
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    ctx.beginPath();
+    ctx.arc(cx - r * 0.25, cy - r * 0.25, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawFloatingTexts() {
+  for (const ft of floatingTexts) {
+    const alpha = ft.life / 40;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHUD() {
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('Score: ' + score, W - 20, 30);
+  ctx.font = '14px monospace';
+  ctx.fillText('Best: ' + highScore, W - 20, 50);
+
+  // Attack charges (left side)
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = attackCharges > 0 ? '#FFD700' : '#999';
+  ctx.fillText('\u26A1 ' + attackCharges, 20, 30);
+}
+
+function drawStartScreen() {
+  drawBackground();
+
+  // Title
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('KEPCO런', W / 2, H / 2 - 40);
+
+  // Subtitle
+  ctx.fillStyle = '#333';
+  ctx.font = '18px sans-serif';
+  ctx.fillText('한국전력공사 횡스크롤 러닝 게임', W / 2, H / 2);
+
+  // Instruction
+  ctx.fillStyle = '#666';
+  ctx.font = '16px sans-serif';
+  const blink = Math.floor(Date.now() / 500) % 2;
+  if (blink) {
+    ctx.fillText('스페이스바 또는 화면을 눌러 시작', W / 2, H / 2 + 50);
+  }
+
+  // High score
+  if (highScore > 0) {
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 80);
+  }
+
+  // Character preview
+  if (spritesLoaded >= spritesTotal && CHAR_FRAMES.powercat.idle.length > 0) {
+    const idx = Math.floor(Date.now() / 200) % CHAR_FRAMES.powercat.idle.length;
+    const img = CHAR_FRAMES.powercat.idle[idx];
+    const aspect = img.naturalWidth / img.naturalHeight;
+    const dh = 65;
+    const dw = dh * aspect;
+    ctx.drawImage(img, W / 2 - dw / 2, H / 2 + 85, dw, dh);
+  }
+}
+
+function drawSelectBackground() {
+  const theme = THEMES[0]; // Always use first theme (blue sky)
+
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  grad.addColorStop(0, theme.sky1);
+  grad.addColorStop(1, theme.sky2);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, GROUND_Y);
+
+  // Clouds
+  ctx.fillStyle = theme.cloud;
+  for (const cloud of clouds) {
+    ctx.beginPath();
+    ctx.arc(cloud.x, cloud.y, cloud.r, 0, Math.PI * 2);
+    ctx.arc(cloud.x + cloud.r * 0.8, cloud.y - cloud.r * 0.2, cloud.r * 0.7, 0, Math.PI * 2);
+    ctx.arc(cloud.x - cloud.r * 0.6, cloud.y + cloud.r * 0.1, cloud.r * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Ground
+  ctx.fillStyle = theme.ground;
+  ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+
+  // Road dashes
+  ctx.strokeStyle = theme.road;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([20, 20]);
+  ctx.lineDashOffset = -roadOffset;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y + 30);
+  ctx.lineTo(W, GROUND_Y + 30);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawSelectScreen() {
+  drawSelectBackground();
+
+  // Title
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('캐릭터 선택', W / 2, 80);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('클릭하거나 1~' + CHARACTERS.length + ' 키로 선택  |  ←→ 이동 후 Enter', W / 2, 115);
+
+  const boxW = 130, boxH = 160, gap = 25;
+  const totalW = CHARACTERS.length * boxW + (CHARACTERS.length - 1) * gap;
+  const startX = (W - totalW) / 2;
+  const boxY = 150;
+
+  for (let i = 0; i < CHARACTERS.length; i++) {
+    const bx = startX + i * (boxW + gap);
+    const ch = CHARACTERS[i];
+    const isSelected = (i === selectedChar);
+
+    // Box background
+    ctx.fillStyle = isSelected ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)';
+    ctx.fillRect(bx, boxY, boxW, boxH);
+    ctx.strokeStyle = isSelected ? '#E94560' : '#aaa';
+    ctx.lineWidth = isSelected ? 4 : 2;
+    ctx.strokeRect(bx, boxY, boxW, boxH);
+
+    // Selected indicator
+    if (isSelected) {
+      ctx.fillStyle = '#E94560';
+      ctx.beginPath();
+      ctx.moveTo(bx + boxW / 2, boxY - 15);
+      ctx.lineTo(bx + boxW / 2 - 10, boxY - 3);
+      ctx.lineTo(bx + boxW / 2 + 10, boxY - 3);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Character preview
+    const previewX = bx + boxW / 2;
+    const previewY = boxY + 30;
+    const previewSize = 50;
+
+    const cf = ch.type === 'powercat' ? CHAR_FRAMES.powercat : CHAR_FRAMES.hongsi;
+    if (spritesLoaded >= spritesTotal && cf.idle.length > 0) {
+      const idx = Math.floor(Date.now() / 200) % cf.idle.length;
+      const img = cf.idle[idx];
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const dh = 58;
+      const dw = dh * aspect;
+      ctx.drawImage(img, previewX - dw / 2, previewY + (55 - dh) / 2, dw, dh);
+    }
+
+    // Name
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(ch.name, previewX, boxY + boxH - 30);
+
+    // Number key hint
+    ctx.fillStyle = '#999';
+    ctx.font = '13px monospace';
+    ctx.fillText('[' + (i + 1) + ']', previewX, boxY + boxH - 10);
+  }
+}
+
+function drawGameOver() {
+  // Animated dim overlay — fades in over first 30 frames
+  const overlayAlpha = Math.min(0.6, gameOverTimer * 0.02);
+  ctx.fillStyle = `rgba(0, 0, 0, ${overlayAlpha})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Wait for overlay to settle before showing text
+  if (gameOverTimer < 25) return;
+
+  const textProgress = Math.min(1, (gameOverTimer - 25) / 20);
+  // Ease-out bounce
+  const bounce = textProgress < 1
+    ? 1 - Math.pow(1 - textProgress, 3) * Math.cos(textProgress * Math.PI * 2) * (1 - textProgress)
+    : 1;
+
+  ctx.textAlign = 'center';
+
+  // Game Over text — drops from above with bounce
+  const titleY = H / 2 - 40;
+  const titleOffset = (1 - bounce) * -120;
+  ctx.globalAlpha = textProgress;
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 48px sans-serif';
+  ctx.fillText('GAME OVER', W / 2, titleY + titleOffset);
+
+  // Score — slides in slightly after title
+  const scoreProgress = Math.min(1, Math.max(0, (gameOverTimer - 35) / 15));
+  if (scoreProgress > 0) {
+    ctx.globalAlpha = scoreProgress;
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 24px monospace';
+    ctx.fillText('Score: ' + score, W / 2, H / 2 + 10);
+  }
+
+  // High score — slides in after score
+  const bestProgress = Math.min(1, Math.max(0, (gameOverTimer - 45) / 15));
+  if (bestProgress > 0) {
+    ctx.globalAlpha = bestProgress;
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '18px monospace';
+    ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 40);
+  }
+
+  // New record
+  if (score >= highScore && score > 0 && bestProgress >= 1) {
+    const pulse = 1 + Math.sin(gameOverTimer * 0.1) * 0.15;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#FFD700';
+    ctx.font = `bold ${Math.round(16 * pulse)}px sans-serif`;
+    ctx.fillText('NEW RECORD!', W / 2, H / 2 + 65);
+  }
+
+  // Restart instruction — only after all text is shown
+  if (gameOverTimer > 70) {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#CCC';
+    ctx.font = '16px sans-serif';
+    const blink = Math.floor(Date.now() / 500) % 2;
+    if (blink) {
+      ctx.fillText('Enter를 눌러 재시작', W / 2, H / 2 + 100);
+    }
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (gameState === STATE.START) {
+    drawStartScreen();
+    return;
+  }
+
+  if (gameState === STATE.SELECT) {
+    drawSelectScreen();
+    return;
+  }
+
+  // Screen shake
+  if (shakeTimer > 0) {
+    ctx.save();
+    const sx = (Math.random() - 0.5) * shakeIntensity * 2;
+    const sy = (Math.random() - 0.5) * shakeIntensity * 2;
+    ctx.translate(sx, sy);
+  }
+
+  drawBackground();
+  drawCoins();
+  drawItems();
+  drawPlayer();
+  drawObstacles();
+  drawProjectiles();
+  drawParticles();
+  drawFloatingTexts();
+  drawHUD();
+
+  if (shakeTimer > 0) {
+    ctx.restore();
+  }
+
+  if (gameState === STATE.GAME_OVER) {
+    drawGameOver();
+  }
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
