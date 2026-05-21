@@ -87,7 +87,6 @@ const STATE = { START: 0, SELECT: 1, PLAYING: 2, GAME_OVER: 3 };
 
 let gameState = STATE.START;
 let selectedChar = 0; // 0=파워캣, 1=네모, 2=세모
-let selectTab = 'select'; // 'select' or 'guide'
 let startTab = 'main'; // 'main' or 'guide'
 
 // Character definitions
@@ -100,6 +99,8 @@ let highScore = (window.scoreAPI ? window.scoreAPI.load() : parseInt(localStorag
 let playerName = localStorage.getItem('kepcoRunPlayerName') || '';
 let isEditingName = false;
 let showConfirmModal = false;
+let isPaused = false;
+let pauseBtnRect = { x: 0, y: 10, w: 36, h: 28 };
 const nicknameInput = document.getElementById('nicknameInput');
 nicknameInput.value = playerName;
 let speed = 8;
@@ -301,15 +302,15 @@ function resetGame() {
   invincibleTimer = 0;
   pits = [];
   fallingIntoPit = false;
+  speed = baseSpeed;
   // Pre-fill coins across screen at ground level
   const groundCoinY = GROUND_Y - PLAYER_SIZE / 2 - COIN_SIZE / 2;
   const coinSpacing = COIN_GAP * baseSpeed;
-  for (let x = PLAYER_X; x <= W + 50; x += coinSpacing) {
+  for (let x = PLAYER_X; x <= getSpawnX(); x += coinSpacing) {
     coins.push({ x, y: groundCoinY, w: COIN_SIZE, h: COIN_SIZE });
   }
   score = 0;
   bonusScore = 0;
-  speed = baseSpeed;
   spawnTimer = 0;
   spawnInterval = 120;
   lastSpawnWidth = 0;
@@ -318,11 +319,13 @@ function resetGame() {
   gameOverTimer = 0;
   deathVY = 0;
   deathRotation = 0;
+  isPaused = false;
 }
 
 function triggerGameOver() {
   gameState = STATE.GAME_OVER;
   gameOverTimer = 0;
+  shakeTimer = 0;
   deathVY = -10;
   deathRotation = 0;
   deathY = player.y;
@@ -475,7 +478,6 @@ function handleStartClick(e) {
 
   // Anywhere else → proceed
   gameState = STATE.SELECT;
-  selectTab = 'select';
   startTab = 'main';
 }
 
@@ -489,18 +491,44 @@ function handleInput(e) {
     }
     if (!playerName) return; // block start without nickname
     gameState = STATE.SELECT;
-    selectTab = 'select';
     startTab = 'main';
     return;
   }
   if (gameState === STATE.GAME_OVER) {
     if (gameOverTimer < 70) return; // wait for animation
     gameState = STATE.SELECT;
-    selectTab = 'select';
     return;
   }
   if (gameState === STATE.PLAYING) {
     e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    const cx = ((e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0)) - rect.left) * scaleX;
+    const cy = ((e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0)) - rect.top) * scaleY;
+
+    if (isPaused) {
+      // Check overlay buttons
+      const btnW = 180, btnH = 44, btnGap = 16;
+      const btnX = W / 2 - btnW / 2;
+      const resumeBtnY = H / 2 - 5;
+      const selectBtnY = resumeBtnY + btnH + btnGap;
+
+      if (cx >= btnX && cx <= btnX + btnW && cy >= resumeBtnY && cy <= resumeBtnY + btnH) {
+        isPaused = false;
+      } else if (cx >= btnX && cx <= btnX + btnW && cy >= selectBtnY && cy <= selectBtnY + btnH) {
+        isPaused = false;
+        gameState = STATE.SELECT;
+          }
+      return;
+    }
+
+    // Check pause button hit
+    if (cx >= pauseBtnRect.x && cx <= pauseBtnRect.x + pauseBtnRect.w && cy >= pauseBtnRect.y && cy <= pauseBtnRect.y + pauseBtnRect.h) {
+      isPaused = true;
+      return;
+    }
+
     jump();
   }
 }
@@ -514,30 +542,12 @@ function handleSelectClick(e) {
   const mx = (e.clientX - rect.left) * scaleX;
   const my = (e.clientY - rect.top) * scaleY;
 
-  // Guide tab: only handle back button
-  if (selectTab === 'guide') {
-    const backBtnX = 15, backBtnY = 15, backBtnW = 120, backBtnH = 32;
-    if (mx >= backBtnX && mx <= backBtnX + backBtnW && my >= backBtnY && my <= backBtnY + backBtnH) {
-      selectTab = 'select';
-    }
-    return;
-  }
-
   // Back to start button (upper left)
   const backBtnW = 120, backBtnH = 34;
   const backBtnX = 15, backBtnY = 15;
   if (mx >= backBtnX && mx <= backBtnX + backBtnW && my >= backBtnY && my <= backBtnY + backBtnH) {
     gameState = STATE.START;
     startTab = 'main';
-    return;
-  }
-
-  // Guide button
-  const guideBtnW = 140, guideBtnH = 34;
-  const guideBtnX = (W - guideBtnW) / 2;
-  const guideBtnY = 320;
-  if (mx >= guideBtnX && mx <= guideBtnX + guideBtnW && my >= guideBtnY && my <= guideBtnY + guideBtnH) {
-    selectTab = 'guide';
     return;
   }
 
@@ -588,6 +598,17 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
+  // Pause toggle (Escape/P) during PLAYING
+  if (gameState === STATE.PLAYING && (e.code === 'Escape' || e.code === 'KeyP')) {
+    e.preventDefault();
+    isPaused = !isPaused;
+    return;
+  }
+  // Block Space while paused
+  if (gameState === STATE.PLAYING && isPaused && e.code === 'Space') {
+    e.preventDefault();
+    return;
+  }
   if (e.code === 'Space') {
     handleInput(e);
     return;
@@ -601,16 +622,9 @@ document.addEventListener('keydown', (e) => {
   if (gameState === STATE.GAME_OVER && e.code === 'Enter') {
     if (gameOverTimer < 70) return;
     gameState = STATE.SELECT;
-    selectTab = 'select';
     return;
   }
   if (gameState === STATE.SELECT) {
-    if (selectTab === 'guide') {
-      if (e.code === 'Escape' || e.code === 'Backspace') {
-        selectTab = 'select';
-      }
-      return;
-    }
     if (e.code === 'Escape' || e.code === 'Backspace') {
       gameState = STATE.START;
       startTab = 'main';
@@ -777,6 +791,7 @@ function update() {
     return;
   }
   if (gameState !== STATE.PLAYING) return;
+  if (isPaused) return;
 
   frameCount++;
 
@@ -2304,6 +2319,29 @@ function drawHUD() {
   ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('HP ' + hp + '/' + MAX_HP, hpBarX + hpBarW / 2, hpBarY + 12);
+
+  // Pause button (left of score)
+  ctx.font = 'bold 20px monospace';
+  const pauseBtnW = 36, pauseBtnH = 28;
+  const pauseBtnX = W - 20 - ctx.measureText('Score: ' + score).width - 10 - pauseBtnW;
+  const pauseBtnY = 10;
+  pauseBtnRect = { x: pauseBtnX, y: pauseBtnY, w: pauseBtnW, h: pauseBtnH };
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath();
+  ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 6);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(pauseBtnX, pauseBtnY, pauseBtnW, pauseBtnH, 6);
+  ctx.stroke();
+  // "II" icon
+  ctx.fillStyle = '#fff';
+  const barW = 4, barH = 14;
+  const barY = pauseBtnY + (pauseBtnH - barH) / 2;
+  const barCX = pauseBtnX + pauseBtnW / 2;
+  ctx.fillRect(barCX - barW - 2, barY, barW, barH);
+  ctx.fillRect(barCX + 2, barY, barW, barH);
 }
 
 function drawStartScreen() {
@@ -2742,214 +2780,7 @@ function drawObstaclePreview(typeIndex, px, py, previewScale) {
   ctx.restore();
 }
 
-function drawGuideScreen() {
-  drawSelectBackground();
-
-  // Back button
-  const backBtnX = 15, backBtnY = 15, backBtnW = 120, backBtnH = 32;
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.fillRect(backBtnX, backBtnY, backBtnW, backBtnH);
-  ctx.strokeStyle = '#E94560';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(backBtnX, backBtnY, backBtnW, backBtnH);
-  ctx.fillStyle = '#E94560';
-  ctx.font = 'bold 14px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('\u2190 \uB3CC\uC544\uAC00\uAE30', backBtnX + backBtnW / 2, backBtnY + 22);
-
-  // Title
-  ctx.fillStyle = '#E94560';
-  ctx.font = 'bold 30px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('\uAC8C\uC784 \uC124\uBA85', W / 2, 40);
-
-  // Divider
-  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(W / 2, 55);
-  ctx.lineTo(W / 2, GROUND_Y - 5);
-  ctx.stroke();
-
-  // === LEFT: Controls ===
-  ctx.textAlign = 'left';
-  const lx = 30;
-  let ly = 75;
-
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 18px sans-serif';
-  ctx.fillText('\uC870\uC791\uBC95', lx, ly);
-  ly += 30;
-
-  // Key descriptions
-  const keys = [
-    ['Space', '\uC810\uD504 / \uACF5\uC911\uC5D0\uC11C \uD55C\uBC88 \uB354 = 2\uB2E8\uC810\uD504'],
-  ];
-  for (const [key, desc] of keys) {
-    ctx.font = 'bold 12px monospace';
-    const kw = ctx.measureText(key).width + 14;
-    ctx.fillStyle = 'rgba(0,0,0,0.07)';
-    ctx.fillRect(lx, ly - 14, kw, 20);
-    ctx.strokeStyle = '#bbb';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(lx, ly - 14, kw, 20);
-    ctx.fillStyle = '#333';
-    ctx.font = 'bold 12px monospace';
-    ctx.fillText(key, lx + 7, ly + 1);
-    ctx.fillStyle = '#555';
-    ctx.font = '13px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(desc, lx + kw + 8, ly + 1);
-    ly += 30;
-  }
-
-  ly += 8;
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('\uC544\uC774\uD15C', lx, ly);
-  ly += 25;
-
-  // Coin (electric coin)
-  const ccx = lx + 10, ccy = ly - 4, cr = 7;
-  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 6;
-  ctx.beginPath(); ctx.arc(ccx, ccy, cr, 0, Math.PI * 2);
-  ctx.fillStyle = '#FFD700'; ctx.fill();
-  ctx.strokeStyle = '#DAA520'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.save(); ctx.translate(ccx, ccy);
-  const cbs = cr * 0.18;
-  ctx.scale(cbs, cbs);
-  ctx.fillStyle = '#FFF';
-  ctx.beginPath();
-  ctx.moveTo(1, -7); ctx.lineTo(-3, -0.5); ctx.lineTo(0, -0.5);
-  ctx.lineTo(-2, 7); ctx.lineTo(4, 0.5); ctx.lineTo(1, 0.5);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('\uC804\uB825', lx + 24, ly);
-  ctx.fillStyle = '#666';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('+5\uC810', lx + 60, ly);
-  ly += 28;
-
-  // Giant item
-  ctx.fillStyle = '#FF4500';
-  ctx.beginPath();
-  ctx.arc(lx + 10, ly - 4, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFF';
-  ctx.font = 'bold 10px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('\u26A1', lx + 10, ly);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.fillText('\uAC70\uB300\uD654', lx + 24, ly);
-  ctx.fillStyle = '#666';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('\uCEE4\uC9C0\uBA70 \uBB34\uC801', lx + 70, ly);
-  ly += 28;
-
-  // Helmet item
-  drawHelmetIcon(lx + 10, ly - 4, 14);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.fillText('\uC548\uC804\uBAA8', lx + 24, ly);
-  ctx.fillStyle = '#666';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('HP +20 \uD68C\uBCF5', lx + 70, ly);
-  ly += 28;
-
-  // Magnet item
-  ctx.fillStyle = '#1E90FF';
-  ctx.beginPath();
-  ctx.arc(lx + 10, ly - 4, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFF';
-  ctx.font = 'bold 10px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('U', lx + 10, ly);
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 13px sans-serif';
-  ctx.fillText('\uC790\uC11D', lx + 24, ly);
-  ctx.fillStyle = '#666';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('\uCF54\uC778 \uC790\uB3D9 \uD761\uC218', lx + 56, ly);
-  ly += 32;
-
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 16px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('\uD301', lx, ly);
-  ly += 22;
-  ctx.fillStyle = '#666';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('\u2022 HP 100 \u2014 \uC7A5\uC560\uBB3C \uCDA9\uB3CC \uC2DC \uAD6C\uAC04\uBCC4 \uCC28\uB4F1 \uB370\uBBF8\uC9C0', lx + 5, ly);
-  ly += 18;
-  ctx.fillText('\u2022 \uB0AD\uB5A0\uB7EC\uC9C0: 1000\uC810\uBD80\uD130 \uB4F1\uC7A5 (\uAC8C\uC784\uC624\uBC84)', lx + 5, ly);
-  ly += 18;
-  ctx.fillText('\u2022 HP 30 \uC774\uD558: \uC804\uB825\uC218\uAE09\uBD88\uC548\uC815\uC73C\uB85C \uC815\uC804\uC774 \uBC1C\uC0DD\uD560 \uC218 \uC788\uC5B4\uC694', lx + 5, ly);
-
-  // === RIGHT: Obstacle Catalog ===
-  const rx = 420;
-  let ry = 75;
-
-  ctx.fillStyle = '#333';
-  ctx.font = 'bold 18px sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText('\uC804\uB825\uC124\uBE44 \uB3C4\uAC10', rx, ry);
-
-  const tiers = [
-    { label: '\uBC30\uC804 \uAD6C\uAC04', color: '#4CAF50', indices: [0, 1, 4, 5, 7, 8], damage: 10 },
-    { label: '\uC1A1\uC804 \uAD6C\uAC04', color: '#FF9800', indices: [2, 3, 6], damage: 30 },
-    { label: '\uBC1C\uC804 \uAD6C\uAC04', color: '#F44336', indices: [9, 10, 11], damage: 50 },
-  ];
-
-  ry += 22;
-  for (const tier of tiers) {
-    ctx.fillStyle = tier.color;
-    ctx.font = 'bold 12px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('\u25A0 ' + tier.label + ' (\uB370\uBBF8\uC9C0: ' + tier.damage + ')', rx, ry);
-    ry += 5;
-
-    const cellW = 60;
-    const cellH = 58;
-
-    for (let i = 0; i < tier.indices.length; i++) {
-      const col = i % 6;
-      const row = Math.floor(i / 6);
-      const cx = rx + col * cellW + cellW / 2;
-      const cy = ry + row * cellH + 40;
-
-      const typeIdx = tier.indices[i];
-      const type = OBSTACLE_TYPES[typeIdx];
-      const s = Math.min(35 / type.h, 0.5);
-
-      drawObstaclePreview(typeIdx, cx, cy, s);
-
-      ctx.fillStyle = '#555';
-      ctx.font = '9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(type.name, cx, cy + 12);
-    }
-
-    const rows = Math.ceil(tier.indices.length / 6);
-    ry += rows * cellH + 8;
-  }
-}
-
 function drawSelectScreen() {
-  if (selectTab === 'guide') {
-    drawGuideScreen();
-    return;
-  }
-
   drawSelectBackground();
 
   // Title
@@ -3030,19 +2861,6 @@ function drawSelectScreen() {
   ctx.textAlign = 'center';
   ctx.fillText('\u2190 \uCCAB\uD654\uBA74', backBtnX + backBtnW / 2, backBtnY + 23);
 
-  // Guide button
-  const guideBtnW = 140, guideBtnH = 34;
-  const guideBtnX = (W - guideBtnW) / 2;
-  const guideBtnY = 320;
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.fillRect(guideBtnX, guideBtnY, guideBtnW, guideBtnH);
-  ctx.strokeStyle = '#4a90d9';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(guideBtnX, guideBtnY, guideBtnW, guideBtnH);
-  ctx.fillStyle = '#4a90d9';
-  ctx.font = 'bold 15px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('\uAC8C\uC784 \uC124\uBA85', W / 2, guideBtnY + 23);
 }
 
 function drawGameOver() {
@@ -3062,49 +2880,104 @@ function drawGameOver() {
 
   ctx.textAlign = 'center';
 
-  // Game Over text — drops from above with bounce
-  const titleY = H / 2 - 40;
+  // --- Card background ---
+  const cardW = 320;
+  const cardH = 280;
+  const cardX = (W - cardW) / 2;
+  const cardY = (H - cardH) / 2;
+  const cardR = 16; // border radius
+
+  ctx.globalAlpha = textProgress;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cardX + cardR, cardY);
+  ctx.lineTo(cardX + cardW - cardR, cardY);
+  ctx.quadraticCurveTo(cardX + cardW, cardY, cardX + cardW, cardY + cardR);
+  ctx.lineTo(cardX + cardW, cardY + cardH - cardR);
+  ctx.quadraticCurveTo(cardX + cardW, cardY + cardH, cardX + cardW - cardR, cardY + cardH);
+  ctx.lineTo(cardX + cardR, cardY + cardH);
+  ctx.quadraticCurveTo(cardX, cardY + cardH, cardX, cardY + cardH - cardR);
+  ctx.lineTo(cardX, cardY + cardR);
+  ctx.quadraticCurveTo(cardX, cardY, cardX + cardR, cardY);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(20, 20, 40, 0.92)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+
+  // --- GAME OVER title — drops from above with bounce ---
+  const titleY = cardY + 38;
   const titleOffset = (1 - bounce) * -120;
   ctx.globalAlpha = textProgress;
   ctx.fillStyle = '#E94560';
-  ctx.font = 'bold 48px sans-serif';
+  ctx.font = 'bold 36px sans-serif';
   ctx.fillText('GAME OVER', W / 2, titleY + titleOffset);
 
-  // Score — slides in slightly after title
+  // --- Character idle sprite ---
+  const F = getFrames();
+  const charType = CHARACTERS[selectedChar].type;
+  const cfg = DRAW_CONFIG[charType];
+  if (F && cfg && spritesLoaded >= spritesTotal && F.idle.length > 0) {
+    const idleIdx = Math.floor(Date.now() / 200) % F.idle.length;
+    const img = F.idle[idleIdx];
+    if (img && img.complete) {
+      const aspect = img.naturalWidth / img.naturalHeight;
+      const dh = cfg.run.drawH;
+      const dw = dh * aspect;
+      const spriteX = W / 2 - dw / 2;
+      const spriteY = cardY + 52;
+      ctx.globalAlpha = textProgress;
+      ctx.drawImage(img, spriteX, spriteY, dw, dh);
+    }
+  }
+
+  // --- Nickname ---
+  const nameY = cardY + 52 + (cfg ? cfg.run.drawH : 68) + 18;
+  ctx.globalAlpha = textProgress;
+  ctx.fillStyle = '#FFF';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText(playerName || CHARACTERS[selectedChar].name, W / 2, nameY);
+
+  // --- Score — slides in slightly after title ---
+  const scoreY = nameY + 30;
   const scoreProgress = Math.min(1, Math.max(0, (gameOverTimer - 35) / 15));
   if (scoreProgress > 0) {
     ctx.globalAlpha = scoreProgress;
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 24px monospace';
-    ctx.fillText('Score: ' + score, W / 2, H / 2 + 10);
+    ctx.fillText('Score: ' + score, W / 2, scoreY);
   }
 
-  // High score — slides in after score
+  // --- Best score — slides in after score ---
+  const bestY = scoreY + 30;
   const bestProgress = Math.min(1, Math.max(0, (gameOverTimer - 45) / 15));
   if (bestProgress > 0) {
     ctx.globalAlpha = bestProgress;
     ctx.fillStyle = '#FFD700';
     ctx.font = '18px monospace';
-    ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 40);
+    ctx.fillText('Best: ' + highScore, W / 2, bestY);
   }
 
-  // New record
+  // --- New record ---
+  const recordY = bestY + 25;
   if (score >= highScore && score > 0 && bestProgress >= 1) {
     const pulse = 1 + Math.sin(gameOverTimer * 0.1) * 0.15;
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#FFD700';
     ctx.font = `bold ${Math.round(16 * pulse)}px sans-serif`;
-    ctx.fillText('NEW RECORD!', W / 2, H / 2 + 65);
+    ctx.fillText('\u2605 NEW RECORD! \u2605', W / 2, recordY);
   }
 
-  // Restart instruction — only after all text is shown
+  // --- Restart instruction — only after all text is shown ---
   if (gameOverTimer > 70) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#CCC';
     ctx.font = '16px sans-serif';
     const blink = Math.floor(Date.now() / 500) % 2;
     if (blink) {
-      ctx.fillText('Enter를 눌러 재시작', W / 2, H / 2 + 100);
+      ctx.fillText('Enter\uB97C \uB20C\uB7EC \uC7AC\uC2DC\uC791', W / 2, cardY + cardH - 14);
     }
   }
 
@@ -3226,6 +3099,44 @@ function draw() {
         ctx.restore();
       }
     }
+  }
+
+  // Pause overlay
+  if (isPaused && gameState === STATE.PLAYING) {
+    const NF = "'Noto Sans KR', sans-serif";
+    // Semi-transparent backdrop
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Title
+    ctx.fillStyle = '#fff';
+    ctx.font = '900 36px ' + NF;
+    ctx.textAlign = 'center';
+    ctx.fillText('\uC77C\uC2DC\uC815\uC9C0', W / 2, H / 2 - 50);
+
+    // Buttons
+    const btnW = 180, btnH = 44, btnGap = 16;
+    const btnX = W / 2 - btnW / 2;
+    const resumeBtnY = H / 2 - 5;
+    const selectBtnY = resumeBtnY + btnH + btnGap;
+
+    // Resume button
+    ctx.fillStyle = '#4CAF50';
+    ctx.beginPath();
+    ctx.roundRect(btnX, resumeBtnY, btnW, btnH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 18px ' + NF;
+    ctx.fillText('\uB2E4\uC2DC \uC2DC\uC791', W / 2, resumeBtnY + btnH / 2 + 6);
+
+    // Character select button
+    ctx.fillStyle = '#E94560';
+    ctx.beginPath();
+    ctx.roundRect(btnX, selectBtnY, btnW, btnH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 18px ' + NF;
+    ctx.fillText('\uCE90\uB9AD\uD130 \uC120\uD0DD', W / 2, selectBtnY + btnH / 2 + 6);
   }
 
   if (gameState === STATE.GAME_OVER) {
