@@ -41,6 +41,7 @@ const PLAYER_X = 80;
 // Sprite frames per character
 const CHAR_FRAMES = {
   powercat: { run: [], jump: [], idle: [], damaged: [] },
+  daeri: { run: [], jump: [], idle: [], damaged: [] },
 };
 let spritesLoaded = 0;
 let spritesTotal = 0;
@@ -59,10 +60,16 @@ loadFrames(CHAR_FRAMES.powercat, 'run', 'sprites/', ['run_1.png','run_2.png','ru
 loadFrames(CHAR_FRAMES.powercat, 'jump', 'sprites/', ['jump_1.png','jump_2.png','jump_3.png','jump_4.png']);
 loadFrames(CHAR_FRAMES.powercat, 'idle', 'sprites/', ['idle_0.png','idle_1.png','idle_2.png','idle_3.png']);
 loadFrames(CHAR_FRAMES.powercat, 'damaged', 'sprites/', ['row7_0.png']);
+// 최강대리
+loadFrames(CHAR_FRAMES.daeri, 'run', 'sprites_daeri/', ['run_0.png','run_1.png','run_2.png','run_3.png','run_4.png','run_5.png']);
+loadFrames(CHAR_FRAMES.daeri, 'jump', 'sprites_daeri/', ['jump_0.png','jump_1.png','jump_2.png','jump_3.png','jump_4.png']);
+loadFrames(CHAR_FRAMES.daeri, 'idle', 'sprites_daeri/', ['idle_0.png','idle_1.png','idle_2.png','idle_3.png']);
+loadFrames(CHAR_FRAMES.daeri, 'damaged', 'sprites_daeri/', ['damaged_0.png','damaged_1.png']);
 
 function getFrames() {
   const ch = CHARACTERS[selectedChar];
   if (ch.type === 'powercat') return CHAR_FRAMES.powercat;
+  if (ch.type === 'daeri') return CHAR_FRAMES.daeri;
   return null;
 }
 
@@ -76,10 +83,12 @@ const STATE = { START: 0, SELECT: 1, PLAYING: 2, GAME_OVER: 3 };
 let gameState = STATE.START;
 let selectedChar = 0; // 0=파워캣, 1=네모, 2=세모
 let selectTab = 'select'; // 'select' or 'guide'
+let startTab = 'main'; // 'main' or 'guide'
 
 // Character definitions
 const CHARACTERS = [
   { name: '파워캣', color: '#FFD700', type: 'powercat' },
+  { name: '최강대리', color: '#D4A574', type: 'daeri' },
 ];
 let score = 0;
 let highScore = (window.scoreAPI ? window.scoreAPI.load() : parseInt(localStorage.getItem('kepcoRunHighScore'))) || 0;
@@ -323,11 +332,48 @@ function jump() {
   }
 }
 
+function handleStartClick(e) {
+  if (gameState !== STATE.START) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  const mx = (e.clientX - rect.left) * scaleX;
+  const my = (e.clientY - rect.top) * scaleY;
+
+  if (startTab === 'guide') {
+    // Back button
+    const backBtnX = 15, backBtnY = 15, backBtnW = 120, backBtnH = 32;
+    if (mx >= backBtnX && mx <= backBtnX + backBtnW && my >= backBtnY && my <= backBtnY + backBtnH) {
+      startTab = 'main';
+    }
+    return;
+  }
+
+  // Guide button (upper left)
+  const guideBtnW = 120, guideBtnH = 34;
+  const guideBtnX = 15;
+  const guideBtnY = 15;
+  if (mx >= guideBtnX && mx <= guideBtnX + guideBtnW && my >= guideBtnY && my <= guideBtnY + guideBtnH) {
+    startTab = 'guide';
+    return;
+  }
+
+  // Anywhere else → proceed
+  gameState = STATE.SELECT;
+  selectTab = 'select';
+  startTab = 'main';
+}
+
 function handleInput(e) {
   if (gameState === STATE.START) {
     e.preventDefault();
+    if (startTab === 'guide') {
+      startTab = 'main';
+      return;
+    }
     gameState = STATE.SELECT;
     selectTab = 'select';
+    startTab = 'main';
     return;
   }
   if (gameState === STATE.GAME_OVER) {
@@ -391,6 +437,12 @@ document.addEventListener('keydown', (e) => {
     handleInput(e);
     return;
   }
+  if (gameState === STATE.START && startTab === 'guide') {
+    if (e.code === 'Escape' || e.code === 'Backspace') {
+      startTab = 'main';
+    }
+    return;
+  }
   if (gameState === STATE.GAME_OVER && e.code === 'Enter') {
     if (gameOverTimer < 70) return;
     gameState = STATE.SELECT;
@@ -416,7 +468,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 canvas.addEventListener('click', (e) => {
-  if (gameState === STATE.SELECT) {
+  if (gameState === STATE.START) {
+    handleStartClick(e);
+  } else if (gameState === STATE.SELECT) {
     handleSelectClick(e);
   } else {
     handleInput(e);
@@ -424,7 +478,9 @@ canvas.addEventListener('click', (e) => {
 });
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
-  if (gameState === STATE.SELECT) {
+  if (gameState === STATE.START) {
+    handleStartClick(e.touches[0]);
+  } else if (gameState === STATE.SELECT) {
     const touch = e.touches[0];
     handleSelectClick(touch);
   } else {
@@ -1157,6 +1213,11 @@ const DRAW_CONFIG = {
     run:     { offX: -5, drawH: 68 },
     jump:    { offX: -4, drawH: 78 },
     damaged: { offX: -2, drawH: 66 },
+  },
+  daeri: {
+    run:     { offX: -8, drawH: 68 },
+    jump:    { offX: -6, drawH: 78 },
+    damaged: { offX: -4, drawH: 70 },
   },
 };
 
@@ -1981,33 +2042,42 @@ function drawCoins() {
 
     // Glow
     ctx.shadowColor = '#FFD700';
-    ctx.shadowBlur = 6;
+    ctx.shadowBlur = 10;
 
-    // Coin body
-    ctx.fillStyle = '#FFD700';
+    // Coin circle
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFD700';
     ctx.fill();
-
-    // Darker edge
-    ctx.strokeStyle = '#B8860B';
+    ctx.strokeStyle = '#DAA520';
     ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Inner ring
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.78, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(218,165,32,0.5)';
+    ctx.lineWidth = 0.8;
     ctx.stroke();
 
     ctx.shadowBlur = 0;
 
-    // Inner ring
-    ctx.strokeStyle = '#DAA520';
-    ctx.lineWidth = 1;
+    // Lightning bolt inside
+    ctx.save();
+    ctx.translate(cx, cy);
+    const bs = r * 0.18;
+    ctx.scale(bs, bs);
+    ctx.fillStyle = '#FFF';
     ctx.beginPath();
-    ctx.arc(cx, cy, r * 0.6, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Highlight
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.25, cy - r * 0.25, r * 0.3, 0, Math.PI * 2);
+    ctx.moveTo(1, -7);
+    ctx.lineTo(-3, -0.5);
+    ctx.lineTo(0, -0.5);
+    ctx.lineTo(-2, 7);
+    ctx.lineTo(4, 0.5);
+    ctx.lineTo(1, 0.5);
+    ctx.closePath();
     ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -2073,25 +2143,30 @@ function drawHUD() {
 }
 
 function drawStartScreen() {
+  if (startTab === 'guide') {
+    drawStartGuideScreen();
+    return;
+  }
+
   drawBackground();
 
   // Title
   ctx.fillStyle = '#E94560';
   ctx.font = 'bold 56px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('KEPCO런', W / 2, H / 2 - 40);
+  ctx.fillText('KEPCO\uB7F0', W / 2, H / 2 - 40);
 
   // Subtitle
   ctx.fillStyle = '#333';
   ctx.font = '18px sans-serif';
-  ctx.fillText('한국전력공사 횡스크롤 러닝 게임', W / 2, H / 2);
+  ctx.fillText('\uD55C\uAD6D\uC804\uB825\uACF5\uC0AC \uD6A1\uC2A4\uD06C\uB864 \uB7EC\uB2DD \uAC8C\uC784', W / 2, H / 2);
 
   // Instruction
   ctx.fillStyle = '#666';
   ctx.font = '16px sans-serif';
   const blink = Math.floor(Date.now() / 500) % 2;
   if (blink) {
-    ctx.fillText('스페이스바 또는 화면을 눌러 시작', W / 2, H / 2 + 50);
+    ctx.fillText('\uC2A4\uD398\uC774\uC2A4\uBC14 \uB610\uB294 \uD654\uBA74\uC744 \uB20C\uB7EC \uC2DC\uC791', W / 2, H / 2 + 50);
   }
 
   // High score
@@ -2101,7 +2176,7 @@ function drawStartScreen() {
     ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 80);
   }
 
-  // Character preview
+  // Character preview (PowerCat only)
   if (spritesLoaded >= spritesTotal && CHAR_FRAMES.powercat.idle.length > 0) {
     const idx = Math.floor(Date.now() / 200) % CHAR_FRAMES.powercat.idle.length;
     const img = CHAR_FRAMES.powercat.idle[idx];
@@ -2109,6 +2184,197 @@ function drawStartScreen() {
     const dh = 65;
     const dw = dh * aspect;
     ctx.drawImage(img, W / 2 - dw / 2, H / 2 + 85, dw, dh);
+  }
+
+  // Guide button (upper left)
+  const guideBtnW = 120, guideBtnH = 34;
+  const guideBtnX = 15;
+  const guideBtnY = 15;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(guideBtnX, guideBtnY, guideBtnW, guideBtnH);
+  ctx.strokeStyle = '#E94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(guideBtnX, guideBtnY, guideBtnW, guideBtnH);
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 15px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\uAC8C\uC784 \uC124\uBA85', guideBtnX + guideBtnW / 2, guideBtnY + 23);
+}
+
+function drawStartGuideScreen() {
+  drawSelectBackground();
+
+  // Back button
+  const backBtnX = 15, backBtnY = 15, backBtnW = 120, backBtnH = 32;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(backBtnX, backBtnY, backBtnW, backBtnH);
+  ctx.strokeStyle = '#E94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(backBtnX, backBtnY, backBtnW, backBtnH);
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u2190 \uB3CC\uC544\uAC00\uAE30', backBtnX + backBtnW / 2, backBtnY + 22);
+
+  // Title
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\uAC8C\uC784 \uC124\uBA85', W / 2, 36);
+
+  // Intro text
+  ctx.fillStyle = '#444';
+  ctx.font = '12px sans-serif';
+  ctx.fillText('\uC6B0\uB9AC\uAC00 \uB9E4\uC77C \uC0AC\uC6A9\uD558\uB294 \uC804\uAE30\uB294 \uC5B4\uB5A4 \uACFC\uC815\uC744 \uAC70\uCCD0 \uC6B0\uB9AC \uC9D1\uAE4C\uC9C0 \uC62C\uAE4C\uC694?', W / 2, 54);
+  ctx.fillText('\uC804\uB825\uC124\uBE44 \uB3C4\uAC10\uC744 \uD1B5\uD574 \uBC1C\uC804, \uC1A1\uC804, \uBC30\uC804 \uC124\uBE44\uB4E4\uC744 \uC27D\uACE0 \uC7AC\uBBF8\uC788\uAC8C \uC54C\uC544\uBCF4\uACE0,', W / 2, 70);
+  ctx.fillText('KEPCO RUN \uAC8C\uC784\uC5D0\uC11C \uC9C1\uC811 \uC804\uB825\uB9DD\uC744 \uB2EC\uB9AC\uBA70 \uCD5C\uACE0 \uC810\uC218\uC5D0 \uB3C4\uC804\uD574\uBCF4\uC138\uC694!', W / 2, 86);
+
+  // Divider
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W / 2, 96);
+  ctx.lineTo(W / 2, GROUND_Y - 5);
+  ctx.stroke();
+
+  // === LEFT: Controls + Items ===
+  ctx.textAlign = 'left';
+  const lx = 30;
+  let ly = 110;
+
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText('\uC870\uC791\uBC95', lx, ly);
+  ly += 30;
+
+  // Space key
+  const keys = [['Space', '\uC810\uD504 / \uACF5\uC911\uC5D0\uC11C \uD55C\uBC88 \uB354 = 2\uB2E8\uC810\uD504']];
+  for (const [key, desc] of keys) {
+    ctx.font = 'bold 12px monospace';
+    const kw = ctx.measureText(key).width + 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.07)';
+    ctx.fillRect(lx, ly - 14, kw, 20);
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(lx, ly - 14, kw, 20);
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(key, lx + 7, ly + 1);
+    ctx.fillStyle = '#555';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(desc, lx + kw + 8, ly + 1);
+    ly += 30;
+  }
+
+  ly += 8;
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\uC544\uC774\uD15C', lx, ly);
+  ly += 25;
+
+  // Electric coin
+  const scx = lx + 10, scy = ly - 4, scr = 7;
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(scx, scy, scr, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFD700'; ctx.fill();
+  ctx.strokeStyle = '#DAA520'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.save(); ctx.translate(scx, scy);
+  const sbs = scr * 0.18;
+  ctx.scale(sbs, sbs);
+  ctx.fillStyle = '#FFF';
+  ctx.beginPath();
+  ctx.moveTo(1, -7); ctx.lineTo(-3, -0.5); ctx.lineTo(0, -0.5);
+  ctx.lineTo(-2, 7); ctx.lineTo(4, 0.5); ctx.lineTo(1, 0.5);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#333'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('\uC804\uB825', lx + 24, ly);
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('+5\uC810', lx + 60, ly);
+  ly += 28;
+
+  // Giant item
+  ctx.fillStyle = '#FF4500';
+  ctx.beginPath(); ctx.arc(lx + 10, ly - 4, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#FFF'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('\u26A1', lx + 10, ly); ctx.textAlign = 'left';
+  ctx.fillStyle = '#333'; ctx.font = 'bold 13px sans-serif';
+  ctx.fillText('\uAC70\uB300\uD654', lx + 24, ly);
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('\uCEE4\uC9C0\uBA70 \uBB34\uC801', lx + 70, ly);
+  ly += 28;
+
+  // Helmet item
+  drawHelmetIcon(lx + 10, ly - 4, 14);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#333'; ctx.font = 'bold 13px sans-serif';
+  ctx.fillText('\uC548\uC804\uBAA8', lx + 24, ly);
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('HP +20 \uD68C\uBCF5', lx + 70, ly);
+  ly += 28;
+
+  // Magnet item
+  ctx.fillStyle = '#1E90FF';
+  ctx.beginPath(); ctx.arc(lx + 10, ly - 4, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#FFF'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('U', lx + 10, ly); ctx.textAlign = 'left';
+  ctx.fillStyle = '#333'; ctx.font = 'bold 13px sans-serif';
+  ctx.fillText('\uC790\uC11D', lx + 24, ly);
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('\uC804\uB825 \uC790\uB3D9 \uD761\uC218', lx + 56, ly);
+  ly += 32;
+
+  // Tips
+  ctx.fillStyle = '#333'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('\uD301', lx, ly);
+  ly += 22;
+  ctx.fillStyle = '#666'; ctx.font = '12px sans-serif';
+  ctx.fillText('\u2022 HP 100 \u2014 \uC7A5\uC560\uBB3C \uCDA9\uB3CC \uC2DC \uAD6C\uAC04\uBCC4 \uCC28\uB4F1 \uB370\uBBF8\uC9C0', lx + 5, ly);
+  ly += 18;
+  ctx.fillText('\u2022 \uB0AD\uB5A0\uB7EC\uC9C0: 1000\uC810\uBD80\uD130 \uB4F1\uC7A5 (\uAC8C\uC784\uC624\uBC84)', lx + 5, ly);
+
+  // === RIGHT: Obstacle Catalog ===
+  const rx = 420;
+  let ry = 110;
+
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('\uC804\uB825\uC124\uBE44 \uB3C4\uAC10', rx, ry);
+
+  const tiers = [
+    { label: '\uBC30\uC804 \uAD6C\uAC04', color: '#4CAF50', indices: [0, 1, 4, 5, 7, 8], damage: 10 },
+    { label: '\uC1A1\uC804 \uAD6C\uAC04', color: '#FF9800', indices: [2, 3, 6], damage: 30 },
+    { label: '\uBC1C\uC804 \uAD6C\uAC04', color: '#F44336', indices: [9, 10, 11], damage: 50 },
+  ];
+
+  ry += 22;
+  for (const tier of tiers) {
+    ctx.fillStyle = tier.color;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('\u25A0 ' + tier.label + ' (\uB370\uBBF8\uC9C0: ' + tier.damage + ')', rx, ry);
+    ry += 5;
+
+    const cellW = 60;
+    const cellH = 55;
+    for (let i = 0; i < tier.indices.length; i++) {
+      const col = i % 6;
+      const row = Math.floor(i / 6);
+      const ccx = rx + col * cellW + cellW / 2;
+      const ccy = ry + row * cellH + 36;
+      const typeIdx = tier.indices[i];
+      const type = OBSTACLE_TYPES[typeIdx];
+      const s = Math.min(30 / type.h, 0.45);
+      drawObstaclePreview(typeIdx, ccx, ccy, s);
+      ctx.fillStyle = '#555'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(type.name, ccx, ccy + 11);
+    }
+    const rows = Math.ceil(tier.indices.length / 6);
+    ry += rows * cellH + 6;
   }
 }
 
@@ -2239,18 +2505,26 @@ function drawGuideScreen() {
   ctx.fillText('\uC544\uC774\uD15C', lx, ly);
   ly += 25;
 
-  // Coin
-  ctx.fillStyle = '#FFD700';
+  // Coin (electric coin)
+  const ccx = lx + 10, ccy = ly - 4, cr = 7;
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(ccx, ccy, cr, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFD700'; ctx.fill();
+  ctx.strokeStyle = '#DAA520'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.save(); ctx.translate(ccx, ccy);
+  const cbs = cr * 0.18;
+  ctx.scale(cbs, cbs);
+  ctx.fillStyle = '#FFF';
   ctx.beginPath();
-  ctx.arc(lx + 10, ly - 4, 7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#B8860B';
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  ctx.moveTo(1, -7); ctx.lineTo(-3, -0.5); ctx.lineTo(0, -0.5);
+  ctx.lineTo(-2, 7); ctx.lineTo(4, 0.5); ctx.lineTo(1, 0.5);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
   ctx.fillStyle = '#333';
   ctx.font = 'bold 13px sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText('\uCF54\uC778', lx + 24, ly);
+  ctx.fillText('\uC804\uB825', lx + 24, ly);
   ctx.fillStyle = '#666';
   ctx.font = '12px sans-serif';
   ctx.fillText('+5\uC810', lx + 60, ly);
