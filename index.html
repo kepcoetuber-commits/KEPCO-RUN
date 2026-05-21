@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700;900&display=swap" rel="stylesheet">
 <title>KEPCO런</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -26,6 +29,8 @@ canvas {
 </head>
 <body>
 <canvas id="game" width="800" height="400"></canvas>
+<input id="nicknameInput" type="text" maxlength="8"
+  style="position:absolute;opacity:0;pointer-events:none;">
 <script>
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -92,6 +97,11 @@ const CHARACTERS = [
 ];
 let score = 0;
 let highScore = (window.scoreAPI ? window.scoreAPI.load() : parseInt(localStorage.getItem('kepcoRunHighScore'))) || 0;
+let playerName = localStorage.getItem('kepcoRunPlayerName') || '';
+let isEditingName = false;
+let showConfirmModal = false;
+const nicknameInput = document.getElementById('nicknameInput');
+nicknameInput.value = playerName;
 let speed = 8;
 let baseSpeed = 8;
 let spawnTimer = 0;
@@ -332,6 +342,36 @@ function jump() {
   }
 }
 
+function startEditingName() {
+  isEditingName = true;
+  nicknameInput.value = '';
+  nicknameInput.style.pointerEvents = 'auto';
+  setTimeout(() => nicknameInput.focus(), 0);
+}
+
+function confirmName() {
+  const name = nicknameInput.value.trim();
+  if (name.length > 0) {
+    playerName = name;
+    localStorage.setItem('kepcoRunPlayerName', playerName);
+  }
+  isEditingName = false;
+  nicknameInput.style.pointerEvents = 'none';
+  nicknameInput.blur();
+}
+
+function cancelEditName() {
+  isEditingName = false;
+  nicknameInput.value = playerName;
+  nicknameInput.style.pointerEvents = 'none';
+  nicknameInput.blur();
+}
+
+// Hidden input event: sync value to canvas rendering
+nicknameInput.addEventListener('input', () => {
+  // Value is auto-synced; canvas reads nicknameInput.value each frame
+});
+
 function handleStartClick(e) {
   if (gameState !== STATE.START) return;
   const rect = canvas.getBoundingClientRect();
@@ -339,6 +379,33 @@ function handleStartClick(e) {
   const scaleY = H / rect.height;
   const mx = (e.clientX - rect.left) * scaleX;
   const my = (e.clientY - rect.top) * scaleY;
+
+  // Confirm modal takes priority
+  if (showConfirmModal) {
+    const modalW = 360, modalH = 140;
+    const modalX = (W - modalW) / 2, modalY = (H - modalH) / 2;
+    const btnW = 80, btnH = 30;
+    const btnY = modalY + modalH - 45;
+    const confirmBtnX = W / 2 - btnW - 10;
+    const cancelBtnX = W / 2 + 10;
+    // Confirm button
+    if (mx >= confirmBtnX && mx <= confirmBtnX + btnW && my >= btnY && my <= btnY + btnH) {
+      showConfirmModal = false;
+      if (highScore > 0) {
+        highScore = 0;
+        if (window.scoreAPI) window.scoreAPI.save(0);
+        else localStorage.setItem('kepcoRunHighScore', '0');
+      }
+      startEditingName();
+      return;
+    }
+    // Cancel button
+    if (mx >= cancelBtnX && mx <= cancelBtnX + btnW && my >= btnY && my <= btnY + btnH) {
+      showConfirmModal = false;
+      return;
+    }
+    return; // click outside modal buttons does nothing
+  }
 
   if (startTab === 'guide') {
     // Back button
@@ -358,6 +425,54 @@ function handleStartClick(e) {
     return;
   }
 
+  // Nickname area
+  const nameAreaY = H / 2 + 30;
+  const nameBoxW = 220, nameBoxH = 30;
+  const nameBoxX = W / 2 - nameBoxW / 2;
+  const nameBoxY = nameAreaY - nameBoxH / 2;
+
+  // Pencil edit button (when name exists, not editing)
+  if (playerName && !isEditingName && ctx._pencilBtn) {
+    const pb = ctx._pencilBtn;
+    if (mx >= pb.x && mx <= pb.x + pb.w && my >= pb.y && my <= pb.y + pb.h) {
+      showConfirmModal = true;
+      return;
+    }
+  }
+
+  // Nickname input box click (when no name or editing)
+  if (!playerName || isEditingName) {
+    if (mx >= nameBoxX && mx <= nameBoxX + nameBoxW && my >= nameBoxY && my <= nameBoxY + nameBoxH) {
+      if (!isEditingName) startEditingName();
+      return;
+    }
+  }
+
+  // If editing name, clicking outside the box confirms
+  if (isEditingName) {
+    confirmName();
+    return;
+  }
+
+  // High score reset button
+  if (highScore > 0) {
+    ctx.font = '400 13px sans-serif';
+    const scoreW = ctx.measureText('Best: ' + highScore).width;
+    const resetBtnW = 46, resetBtnH = 18;
+    const resetBtnX = W / 2 + scoreW / 2 + 8;
+    const scoreY = H / 2 + 82;
+    const resetBtnY = scoreY - resetBtnH / 2 - 4;
+    if (mx >= resetBtnX && mx <= resetBtnX + resetBtnW && my >= resetBtnY && my <= resetBtnY + resetBtnH) {
+      highScore = 0;
+      if (window.scoreAPI) window.scoreAPI.save(0);
+      else localStorage.setItem('kepcoRunHighScore', '0');
+      return;
+    }
+  }
+
+  // Block game start if no nickname
+  if (!playerName) return;
+
   // Anywhere else → proceed
   gameState = STATE.SELECT;
   selectTab = 'select';
@@ -367,10 +482,12 @@ function handleStartClick(e) {
 function handleInput(e) {
   if (gameState === STATE.START) {
     e.preventDefault();
+    if (isEditingName || showConfirmModal) return;
     if (startTab === 'guide') {
       startTab = 'main';
       return;
     }
+    if (!playerName) return; // block start without nickname
     gameState = STATE.SELECT;
     selectTab = 'select';
     startTab = 'main';
@@ -406,6 +523,15 @@ function handleSelectClick(e) {
     return;
   }
 
+  // Back to start button (upper left)
+  const backBtnW = 120, backBtnH = 34;
+  const backBtnX = 15, backBtnY = 15;
+  if (mx >= backBtnX && mx <= backBtnX + backBtnW && my >= backBtnY && my <= backBtnY + backBtnH) {
+    gameState = STATE.START;
+    startTab = 'main';
+    return;
+  }
+
   // Guide button
   const guideBtnW = 140, guideBtnH = 34;
   const guideBtnX = (W - guideBtnW) / 2;
@@ -433,6 +559,35 @@ function handleSelectClick(e) {
 
 // Input
 document.addEventListener('keydown', (e) => {
+  // Nickname editing: handle Enter/Esc, block all other game keys
+  if (gameState === STATE.START && isEditingName) {
+    if (e.code === 'Enter') {
+      e.preventDefault();
+      confirmName();
+    } else if (e.code === 'Escape') {
+      e.preventDefault();
+      cancelEditName();
+    }
+    // All other keys go to the hidden input naturally
+    return;
+  }
+  // Confirm modal: Enter=confirm, Esc=cancel
+  if (gameState === STATE.START && showConfirmModal) {
+    if (e.code === 'Enter') {
+      e.preventDefault();
+      showConfirmModal = false;
+      if (highScore > 0) {
+        highScore = 0;
+        if (window.scoreAPI) window.scoreAPI.save(0);
+        else localStorage.setItem('kepcoRunHighScore', '0');
+      }
+      startEditingName();
+    } else if (e.code === 'Escape') {
+      e.preventDefault();
+      showConfirmModal = false;
+    }
+    return;
+  }
   if (e.code === 'Space') {
     handleInput(e);
     return;
@@ -456,7 +611,10 @@ document.addEventListener('keydown', (e) => {
       }
       return;
     }
-    if (e.code === 'ArrowLeft') {
+    if (e.code === 'Escape' || e.code === 'Backspace') {
+      gameState = STATE.START;
+      startTab = 'main';
+    } else if (e.code === 'ArrowLeft') {
       selectedChar = (selectedChar + CHARACTERS.length - 1) % CHARACTERS.length;
     } else if (e.code === 'ArrowRight') {
       selectedChar = (selectedChar + 1) % CHARACTERS.length;
@@ -2100,6 +2258,12 @@ function drawHUD() {
   ctx.fillText('Score: ' + score, W - 20, 30);
   ctx.font = '14px monospace';
   ctx.fillText('Best: ' + highScore, W - 20, 50);
+  if (playerName) {
+    ctx.fillStyle = '#666';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(playerName, W - 20, 66);
+  }
 
   // HP bar
   const hpIconSize = 18;
@@ -2150,30 +2314,134 @@ function drawStartScreen() {
 
   drawBackground();
 
+  const NF = "'Noto Sans KR', sans-serif";
+
   // Title
   ctx.fillStyle = '#E94560';
-  ctx.font = 'bold 56px sans-serif';
+  ctx.font = '900 54px ' + NF;
   ctx.textAlign = 'center';
-  ctx.fillText('KEPCO\uB7F0', W / 2, H / 2 - 40);
+  ctx.fillText('KEPCO\uB7F0', W / 2, H / 2 - 65);
 
-  // Subtitle
+  // Intro line 1 — emphasis
   ctx.fillStyle = '#333';
-  ctx.font = '18px sans-serif';
-  ctx.fillText('\uD55C\uAD6D\uC804\uB825\uACF5\uC0AC \uD6A1\uC2A4\uD06C\uB864 \uB7EC\uB2DD \uAC8C\uC784', W / 2, H / 2);
+  ctx.font = '700 15px ' + NF;
+  ctx.fillText('\uC6B0\uB9AC\uAC00 \uB9E4\uC77C \uC0AC\uC6A9\uD558\uB294 \uC804\uAE30\uB294 \uC5B4\uB5A4 \uACFC\uC815\uC744 \uAC70\uCCD0 \uC6B0\uB9AC \uC9D1\uAE4C\uC9C0 \uC62C\uAE4C\uC694?', W / 2, H / 2 - 30);
+
+  // Intro line 2, 3
+  ctx.fillStyle = '#555';
+  ctx.font = '300 13px ' + NF;
+  ctx.fillText('\uC804\uB825\uC124\uBE44 \uB3C4\uAC10\uC744 \uD1B5\uD574 \uBC1C\uC804, \uC1A1\uC804, \uBC30\uC804 \uC124\uBE44\uB4E4\uC744 \uC27D\uACE0 \uC7AC\uBBF8\uC788\uAC8C \uC54C\uC544\uBCF4\uACE0,', W / 2, H / 2 - 6);
+  ctx.fillText('KEPCO RUN \uAC8C\uC784\uC5D0\uC11C \uC9C1\uC811 \uC804\uB825\uB9DD\uC744 \uB2EC\uB9AC\uBA70 \uCD5C\uACE0 \uC810\uC218\uC5D0 \uB3C4\uC804\uD574\uBCF4\uC138\uC694!', W / 2, H / 2 + 10);
+
+  // Nickname area
+  const nameAreaY = H / 2 + 30;
+  const nameBoxW = 220, nameBoxH = 30;
+  const nameBoxX = W / 2 - nameBoxW / 2;
+  const nameBoxY = nameAreaY - nameBoxH / 2;
+
+  if (isEditingName) {
+    // Editing mode: show input box with blinking cursor
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+    ctx.strokeStyle = '#E94560';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+
+    ctx.fillStyle = '#333';
+    ctx.font = '400 15px ' + NF;
+    ctx.textAlign = 'center';
+    const displayText = nicknameInput.value;
+    if (displayText.length > 0) {
+      ctx.fillText(displayText, W / 2, nameAreaY + 5);
+    } else {
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694', W / 2, nameAreaY + 5);
+    }
+    // Blinking cursor
+    const cursorBlink = Math.floor(Date.now() / 500) % 2;
+    if (cursorBlink) {
+      ctx.font = '400 15px ' + NF;
+      const textW = displayText.length > 0 ? ctx.measureText(displayText).width : 0;
+      const cursorX = W / 2 + textW / 2 + 2;
+      ctx.strokeStyle = '#E94560';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cursorX, nameBoxY + 5);
+      ctx.lineTo(cursorX, nameBoxY + nameBoxH - 5);
+      ctx.stroke();
+    }
+  } else if (playerName) {
+    // Display mode: show player name + pencil edit button
+    ctx.fillStyle = '#555';
+    ctx.font = '400 14px ' + NF;
+    ctx.textAlign = 'center';
+    const nameText = '\uD50C\uB808\uC774\uC5B4: ' + playerName;
+    ctx.fillText(nameText, W / 2, nameAreaY + 5);
+    // Pencil edit button
+    const nameTextW = ctx.measureText(nameText).width;
+    const pencilX = W / 2 + nameTextW / 2 + 12;
+    const pencilY = nameAreaY - 6;
+    const pencilSize = 16;
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#999';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u270F\uFE0F', pencilX, pencilY + 12);
+    // Store pencil hit area for click handling
+    ctx._pencilBtn = { x: pencilX - pencilSize / 2 - 4, y: pencilY - 2, w: pencilSize + 8, h: pencilSize + 4 };
+  } else {
+    // No nickname: show clickable input placeholder
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
+    ctx.fillStyle = '#aaa';
+    ctx.font = '400 14px ' + NF;
+    ctx.textAlign = 'center';
+    ctx.fillText('\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694', W / 2, nameAreaY + 5);
+  }
 
   // Instruction
   ctx.fillStyle = '#666';
-  ctx.font = '16px sans-serif';
+  ctx.font = '400 15px ' + NF;
+  ctx.textAlign = 'center';
   const blink = Math.floor(Date.now() / 500) % 2;
-  if (blink) {
-    ctx.fillText('\uC2A4\uD398\uC774\uC2A4\uBC14 \uB610\uB294 \uD654\uBA74\uC744 \uB20C\uB7EC \uC2DC\uC791', W / 2, H / 2 + 50);
+  if (playerName && !isEditingName) {
+    if (blink) {
+      ctx.fillText('\uC2A4\uD398\uC774\uC2A4\uBC14 \uB610\uB294 \uD654\uBA74\uC744 \uB20C\uB7EC \uC2DC\uC791', W / 2, H / 2 + 60);
+    }
+  } else if (!isEditingName) {
+    ctx.fillStyle = '#E94560';
+    ctx.font = '400 13px ' + NF;
+    if (blink) {
+      ctx.fillText('\uB2C9\uB124\uC784\uC744 \uBA3C\uC800 \uC785\uB825\uD574\uC8FC\uC138\uC694', W / 2, H / 2 + 60);
+    }
   }
 
-  // High score
+  // High score + reset button
   if (highScore > 0) {
-    ctx.fillStyle = '#888';
-    ctx.font = '14px monospace';
-    ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 80);
+    ctx.fillStyle = '#999';
+    ctx.font = '400 13px ' + NF;
+    ctx.textAlign = 'center';
+    ctx.fillText('Best: ' + highScore, W / 2, H / 2 + 82);
+
+    // Reset button — vertically centered with Best text
+    const scoreFont = '400 13px ' + NF;
+    ctx.font = scoreFont;
+    const scoreW = ctx.measureText('Best: ' + highScore).width;
+    const resetBtnW = 46, resetBtnH = 18;
+    const resetBtnX = W / 2 + scoreW / 2 + 8;
+    const scoreY = H / 2 + 82;
+    const resetBtnY = scoreY - resetBtnH / 2 - 4;
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.fillRect(resetBtnX, resetBtnY, resetBtnW, resetBtnH);
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(resetBtnX, resetBtnY, resetBtnW, resetBtnH);
+    ctx.fillStyle = '#999';
+    ctx.font = '400 10px ' + NF;
+    ctx.textAlign = 'center';
+    ctx.fillText('\uCD08\uAE30\uD654', resetBtnX + resetBtnW / 2, resetBtnY + 13);
   }
 
   // Character preview (PowerCat only)
@@ -2183,7 +2451,7 @@ function drawStartScreen() {
     const aspect = img.naturalWidth / img.naturalHeight;
     const dh = 65;
     const dw = dh * aspect;
-    ctx.drawImage(img, W / 2 - dw / 2, H / 2 + 85, dw, dh);
+    ctx.drawImage(img, W / 2 - dw / 2, H / 2 + 88, dw, dh);
   }
 
   // Guide button (upper left)
@@ -2196,9 +2464,51 @@ function drawStartScreen() {
   ctx.lineWidth = 2;
   ctx.strokeRect(guideBtnX, guideBtnY, guideBtnW, guideBtnH);
   ctx.fillStyle = '#E94560';
-  ctx.font = 'bold 15px sans-serif';
+  ctx.font = '700 14px ' + NF;
   ctx.textAlign = 'center';
   ctx.fillText('\uAC8C\uC784 \uC124\uBA85', guideBtnX + guideBtnW / 2, guideBtnY + 23);
+
+  // Confirm modal overlay (nickname change) — drawn last so it's on top
+  if (showConfirmModal) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, W, H);
+    // Modal box
+    const modalW = 360, modalH = 140;
+    const modalX = (W - modalW) / 2, modalY = (H - modalH) / 2;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(modalX, modalY, modalW, modalH);
+    ctx.strokeStyle = '#E94560';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(modalX, modalY, modalW, modalH);
+    // Message
+    ctx.fillStyle = '#333';
+    ctx.font = '700 14px ' + NF;
+    ctx.textAlign = 'center';
+    if (highScore > 0) {
+      ctx.fillText('\uB2C9\uB124\uC784\uC744 \uBCC0\uACBD\uD558\uBA74', W / 2, modalY + 35);
+      ctx.fillText('\uCD5C\uACE0\uC810\uC218\uAC00 \uCD08\uAE30\uD654\uB429\uB2C8\uB2E4.', W / 2, modalY + 55);
+    } else {
+      ctx.fillText('\uB2C9\uB124\uC784\uC744', W / 2, modalY + 35);
+      ctx.fillText('\uBCC0\uACBD\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?', W / 2, modalY + 55);
+    }
+    ctx.font = '400 13px ' + NF;
+    ctx.fillStyle = '#666';
+    ctx.fillText(highScore > 0 ? '\uBCC0\uACBD\uD558\uC2DC\uACA0\uC2B5\uB2C8\uAE4C?' : '', W / 2, modalY + 75);
+    // Confirm button
+    const btnW = 80, btnH = 30;
+    const confirmBtnX = W / 2 - btnW - 10, btnY = modalY + modalH - 45;
+    ctx.fillStyle = '#E94560';
+    ctx.fillRect(confirmBtnX, btnY, btnW, btnH);
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 13px ' + NF;
+    ctx.fillText('\uD655\uC778', confirmBtnX + btnW / 2, btnY + 20);
+    // Cancel button
+    const cancelBtnX = W / 2 + 10;
+    ctx.fillStyle = '#ccc';
+    ctx.fillRect(cancelBtnX, btnY, btnW, btnH);
+    ctx.fillStyle = '#333';
+    ctx.fillText('\uCDE8\uC18C', cancelBtnX + btnW / 2, btnY + 20);
+  }
 }
 
 function drawStartGuideScreen() {
@@ -2222,25 +2532,18 @@ function drawStartGuideScreen() {
   ctx.textAlign = 'center';
   ctx.fillText('\uAC8C\uC784 \uC124\uBA85', W / 2, 36);
 
-  // Intro text
-  ctx.fillStyle = '#444';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('\uC6B0\uB9AC\uAC00 \uB9E4\uC77C \uC0AC\uC6A9\uD558\uB294 \uC804\uAE30\uB294 \uC5B4\uB5A4 \uACFC\uC815\uC744 \uAC70\uCCD0 \uC6B0\uB9AC \uC9D1\uAE4C\uC9C0 \uC62C\uAE4C\uC694?', W / 2, 54);
-  ctx.fillText('\uC804\uB825\uC124\uBE44 \uB3C4\uAC10\uC744 \uD1B5\uD574 \uBC1C\uC804, \uC1A1\uC804, \uBC30\uC804 \uC124\uBE44\uB4E4\uC744 \uC27D\uACE0 \uC7AC\uBBF8\uC788\uAC8C \uC54C\uC544\uBCF4\uACE0,', W / 2, 70);
-  ctx.fillText('KEPCO RUN \uAC8C\uC784\uC5D0\uC11C \uC9C1\uC811 \uC804\uB825\uB9DD\uC744 \uB2EC\uB9AC\uBA70 \uCD5C\uACE0 \uC810\uC218\uC5D0 \uB3C4\uC804\uD574\uBCF4\uC138\uC694!', W / 2, 86);
-
   // Divider
   ctx.strokeStyle = 'rgba(0,0,0,0.1)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(W / 2, 96);
+  ctx.moveTo(W / 2, 52);
   ctx.lineTo(W / 2, GROUND_Y - 5);
   ctx.stroke();
 
   // === LEFT: Controls + Items ===
   ctx.textAlign = 'left';
   const lx = 30;
-  let ly = 110;
+  let ly = 68;
 
   ctx.fillStyle = '#333';
   ctx.font = 'bold 18px sans-serif';
@@ -2335,6 +2638,8 @@ function drawStartGuideScreen() {
   ctx.fillText('\u2022 HP 100 \u2014 \uC7A5\uC560\uBB3C \uCDA9\uB3CC \uC2DC \uAD6C\uAC04\uBCC4 \uCC28\uB4F1 \uB370\uBBF8\uC9C0', lx + 5, ly);
   ly += 18;
   ctx.fillText('\u2022 \uB0AD\uB5A0\uB7EC\uC9C0: 1000\uC810\uBD80\uD130 \uB4F1\uC7A5 (\uAC8C\uC784\uC624\uBC84)', lx + 5, ly);
+  ly += 18;
+  ctx.fillText('\u2022 HP 30 \uC774\uD558: \uC804\uB825\uC218\uAE09\uBD88\uC548\uC815\uC73C\uB85C \uC815\uC804\uC774 \uBC1C\uC0DD\uD560 \uC218 \uC788\uC5B4\uC694', lx + 5, ly);
 
   // === RIGHT: Obstacle Catalog ===
   const rx = 420;
@@ -2587,6 +2892,8 @@ function drawGuideScreen() {
   ctx.fillText('\u2022 HP 100 \u2014 \uC7A5\uC560\uBB3C \uCDA9\uB3CC \uC2DC \uAD6C\uAC04\uBCC4 \uCC28\uB4F1 \uB370\uBBF8\uC9C0', lx + 5, ly);
   ly += 18;
   ctx.fillText('\u2022 \uB0AD\uB5A0\uB7EC\uC9C0: 1000\uC810\uBD80\uD130 \uB4F1\uC7A5 (\uAC8C\uC784\uC624\uBC84)', lx + 5, ly);
+  ly += 18;
+  ctx.fillText('\u2022 HP 30 \uC774\uD558: \uC804\uB825\uC218\uAE09\uBD88\uC548\uC815\uC73C\uB85C \uC815\uC804\uC774 \uBC1C\uC0DD\uD560 \uC218 \uC788\uC5B4\uC694', lx + 5, ly);
 
   // === RIGHT: Obstacle Catalog ===
   const rx = 420;
@@ -2710,6 +3017,19 @@ function drawSelectScreen() {
     ctx.fillText('[' + (i + 1) + ']', previewX, boxY + boxH - 10);
   }
 
+  // Back to start button (upper left)
+  const backBtnW = 120, backBtnH = 34;
+  const backBtnX = 15, backBtnY = 15;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(backBtnX, backBtnY, backBtnW, backBtnH);
+  ctx.strokeStyle = '#E94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(backBtnX, backBtnY, backBtnW, backBtnH);
+  ctx.fillStyle = '#E94560';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\u2190 \uCCAB\uD654\uBA74', backBtnX + backBtnW / 2, backBtnY + 23);
+
   // Guide button
   const guideBtnW = 140, guideBtnH = 34;
   const guideBtnX = (W - guideBtnW) / 2;
@@ -2826,7 +3146,7 @@ function draw() {
   }
 
   // Blackout flicker when HP <= 40  (정전 연출)
-  if (gameState === STATE.PLAYING && hp <= 40 && hp > 0) {
+  if (gameState === STATE.PLAYING && hp <= 30 && hp > 0) {
     const cycle = frameCount % 180; // 3-second loop
     // Phase: 0~29 = blackout sequence
     if (cycle < 30) {
