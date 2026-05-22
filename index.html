@@ -55,8 +55,20 @@ function loadFrames(charFrames, category, dir, files) {
   for (const f of files) {
     spritesTotal++;
     const img = new Image();
+    img.onload = function() {
+      if (this._loaded) return;
+      this._loaded = true;
+      spritesLoaded++;
+      // data URL로 교체 → 캔버스 taint 방지
+      try {
+        const tc = document.createElement('canvas');
+        tc.width = this.naturalWidth;
+        tc.height = this.naturalHeight;
+        tc.getContext('2d').drawImage(this, 0, 0);
+        this.src = tc.toDataURL('image/png');
+      } catch(e) { /* file:// 환경에서는 원본 유지 */ }
+    };
     img.src = dir + f;
-    img.onload = () => { spritesLoaded++; };
     charFrames[category].push(img);
   }
 }
@@ -129,18 +141,19 @@ const player = {
 // Obstacles
 let obstacles = [];
 const OBSTACLE_TYPES = [
-  { name: '전봇대', w: 20, h: 60, color: '#888', damage: 10 },
-  { name: '높은전봇대', w: 20, h: 90, color: '#7a7a7a', damage: 10 },
-  { name: '송전탑', w: 40, h: 80, color: '#666', triangle: true, damage: 30 },
-  { name: '대형송전탑', w: 55, h: 110, color: '#5a5a5a', triangle: true, damage: 30 },
-  { name: '배전함', w: 55, h: 42, color: '#777', damage: 10 },
-  { name: '이중배전함', w: 80, h: 55, color: '#6a6a6a', damage: 10 },
-  { name: '변압기', w: 36, h: 58, color: '#4a7a4a', damage: 30 },
-  { name: '건전지', w: 28, h: 55, color: '#2a2a2a', damage: 10 },
-  { name: '지상개폐기', w: 55, h: 48, color: '#5a6a5a', damage: 10 },
-  { name: '풍력발전기', w: 24, h: 115, color: '#e8e8e8', windmill: true, damage: 50 },
-  { name: '태양광패널', w: 60, h: 50, color: '#1a3a6a', solar: true, damage: 50 },
-  { name: 'ESS 컨테이너', w: 80, h: 50, color: '#e0e0e0', ess: true, damage: 50 },
+  { name: '배전전주', w: 20, h: 60, color: '#888', damage: 10 },
+  { name: '고압배전전주', w: 20, h: 90, color: '#7a7a7a', damage: 10 },
+  { name: '154kV 송전철탑', w: 40, h: 80, color: '#666', triangle: true, damage: 30 },
+  { name: '345kV 송전철탑', w: 55, h: 95, color: '#5a5a5a', triangle: true, damage: 30 },
+  { name: '저압 배전함', w: 55, h: 42, color: '#777', damage: 10 },
+  { name: '지중 배전함', w: 80, h: 55, color: '#6a6a6a', damage: 10 },
+  { name: '전력용 변압기', w: 36, h: 58, color: '#4a7a4a', damage: 30 },
+  { name: '축전지', w: 28, h: 55, color: '#2a2a2a', damage: 10 },
+  { name: '지상 개폐기', w: 55, h: 48, color: '#5a6a5a', damage: 10 },
+  { name: '풍력발전 설비', w: 24, h: 115, color: '#e8e8e8', windmill: true, damage: 50 },
+  { name: '태양광 발전설비', w: 60, h: 50, color: '#1a3a6a', solar: true, damage: 50 },
+  { name: 'ESS 설비', w: 80, h: 50, color: '#e0e0e0', ess: true, damage: 50 },
+  { name: '765kV 송전철탑', w: 80, h: 110, color: '#3a3a3a', triangle: true, damage: 30 },
 ];
 
 // Obstacle spawn pools by score tier (indices into OBSTACLE_TYPES)
@@ -149,13 +162,13 @@ const TIER_POOLS = [
   // 0~1499: 배전 + 송전 구간
   [
     0, 0, 0, 1, 1, 1,             // 전봇대류 — 높은 빈도
-    2, 2, 3, 3, 6, 6,             // 송전탑, 대형송전탑, 변압기
+    2, 2, 3, 3, 6, 6, 12,         // 송전탑, 대형송전탑, 변압기, 765kV 송전철탑
     4, 4, 5, 5, 7, 7, 8, 8,       // 배전함, 이중배전함, 건전지, 지상개폐기
   ],
   // 1500~: 발전 구간 추가
   [
     0, 0, 0, 1, 1, 1,
-    2, 2, 3, 3, 6, 6,
+    2, 2, 3, 3, 6, 6, 12,         // 송전탑, 대형송전탑, 변압기, 765kV 송전철탑
     4, 4, 5, 5, 7, 7, 8, 8,
     9, 9, 10, 10, 11, 11,           // + 풍력발전기, 태양광패널, ESS 컨테이너
   ],
@@ -202,6 +215,7 @@ let shakeIntensity = 0;
 
 // Game over animation
 let gameOverTimer = 0;
+let saveNotifyTimer = 0;
 const GAME_OVER_ANIM_DURATION = 90; // frames before UI fully appears
 let deathVY = 0;
 let deathRotation = 0;
@@ -496,6 +510,25 @@ function handleInput(e) {
   }
   if (gameState === STATE.GAME_OVER) {
     if (gameOverTimer < 70) return; // wait for animation
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    const cx = ((e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0)) - rect.left) * scaleX;
+    const cy = ((e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0)) - rect.top) * scaleY;
+    const cardH = 280;
+    const cardY = (H - cardH) / 2;
+    const btnW = 130, btnH = 32, gap = 12;
+    const btnY = cardY + cardH + 12;
+    const ytBtnX = W / 2 - gap / 2 - btnW;
+    const rkBtnX = W / 2 + gap / 2;
+    if (cx >= ytBtnX && cx <= ytBtnX + btnW && cy >= btnY && cy <= btnY + btnH) {
+      window.open('https://youtube.com/@kepconewmedia?si=c6jPXv8SpLwSJT40', '_blank');
+      return;
+    }
+    if (cx >= rkBtnX && cx <= rkBtnX + btnW && cy >= btnY && cy <= btnY + btnH) {
+      downloadGameOverCard();
+      return;
+    }
     gameState = STATE.SELECT;
     return;
   }
@@ -1770,7 +1803,7 @@ function drawObstacles() {
       // Cross beams (horizontal lattice bars)
       ctx.strokeStyle = '#6a6a6a';
       ctx.lineWidth = 1.5;
-      const beamCount = obs.h > 90 ? 5 : 3;
+      const beamCount = obs.h > 100 ? 7 : obs.h > 85 ? 5 : 3;
       for (let b = 1; b <= beamCount; b++) {
         const ratio = 0.2 + (b / (beamCount + 1)) * 0.75;
         const gy = obs.y + obs.h * ratio;
@@ -1786,7 +1819,7 @@ function drawObstacles() {
       // X bracing between legs
       ctx.strokeStyle = '#5a5a5a';
       ctx.lineWidth = 1;
-      const sections = obs.h > 90 ? 3 : 2;
+      const sections = obs.h > 100 ? 4 : obs.h > 85 ? 3 : 2;
       for (let s = 0; s < sections; s++) {
         const t1 = 0.3 + (s / sections) * 0.6;
         const t2 = 0.3 + ((s + 1) / sections) * 0.6;
@@ -1840,10 +1873,10 @@ function drawObstacles() {
       ctx.lineWidth = 2;
       ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
 
-      if (obs.name === '배전함' || obs.name === '이중배전함') {
+      if (obs.name === '저압 배전함' || obs.name === '지중 배전함') {
         ctx.strokeStyle = '#999';
         ctx.lineWidth = 1;
-        if (obs.name === '이중배전함') {
+        if (obs.name === '지중 배전함') {
           ctx.strokeRect(obs.x + 4, obs.y + 4, obs.w / 2 - 6, obs.h - 8);
           ctx.strokeRect(obs.x + obs.w / 2 + 2, obs.y + 4, obs.w / 2 - 6, obs.h - 8);
           ctx.fillStyle = '#FFD700';
@@ -1855,7 +1888,7 @@ function drawObstacles() {
         }
       }
 
-      if (obs.name === '전봇대' || obs.name === '높은전봇대') {
+      if (obs.name === '배전전주' || obs.name === '고압배전전주') {
         // ── 전봇대 디테일 ──
         // Wood grain texture (vertical lines)
         ctx.strokeStyle = '#9a8a6a';
@@ -1907,7 +1940,7 @@ function drawObstacles() {
         ctx.moveTo(obs.x + obs.w + 10, obs.y + 6);
         ctx.quadraticCurveTo(obs.x + obs.w + 25, obs.y + 18, obs.x + obs.w + 35, obs.y + 12);
         ctx.stroke();
-        if (obs.name === '높은전봇대') {
+        if (obs.name === '고압배전전주') {
           // Second cross arm (lower)
           ctx.fillStyle = '#7a7a7a';
           ctx.fillRect(obs.x - 11, obs.y + 22, obs.w + 22, 4);
@@ -1924,7 +1957,7 @@ function drawObstacles() {
         }
       }
 
-      if (obs.name === '변압기') {
+      if (obs.name === '전력용 변압기') {
         ctx.fillStyle = '#3a6a3a';
         ctx.fillRect(obs.x + 4, obs.y + 4, obs.w - 8, obs.h * 0.4);
         ctx.strokeStyle = '#5a9a5a';
@@ -1941,7 +1974,7 @@ function drawObstacles() {
       }
 
       // ── 건전지 (Battery) ──
-      if (obs.name === '건전지') {
+      if (obs.name === '축전지') {
         // Battery body gradient
         const batGrad = ctx.createLinearGradient(obs.x, 0, obs.x + obs.w, 0);
         batGrad.addColorStop(0, '#3a3a3a');
@@ -1982,7 +2015,7 @@ function drawObstacles() {
       }
 
       // ── 지상개폐기 (Ground Switchgear) ──
-      if (obs.name === '지상개폐기') {
+      if (obs.name === '지상 개폐기') {
         // Metal body gradient
         const sgGrad = ctx.createLinearGradient(0, obs.y, 0, obs.y + obs.h);
         sgGrad.addColorStop(0, '#6a7a6a');
@@ -2681,7 +2714,7 @@ function drawStartGuideScreen() {
 
   // === RIGHT: Obstacle Catalog ===
   const rx = 420;
-  let ry = 110;
+  let ry = 102;
 
   ctx.fillStyle = '#333';
   ctx.font = 'bold 18px sans-serif';
@@ -2690,7 +2723,7 @@ function drawStartGuideScreen() {
 
   const tiers = [
     { label: '\uBC30\uC804 \uAD6C\uAC04', color: '#4CAF50', indices: [0, 1, 4, 5, 7, 8], damage: 10 },
-    { label: '\uC1A1\uC804 \uAD6C\uAC04', color: '#FF9800', indices: [2, 3, 6], damage: 30 },
+    { label: '\uC1A1\uC804 \uAD6C\uAC04', color: '#FF9800', indices: [2, 3, 12, 6], damage: 30 },
     { label: '\uBC1C\uC804 \uAD6C\uAC04', color: '#F44336', indices: [9, 10, 11], damage: 50 },
   ];
 
@@ -2700,10 +2733,10 @@ function drawStartGuideScreen() {
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText('\u25A0 ' + tier.label + ' (\uB370\uBBF8\uC9C0: ' + tier.damage + ')', rx, ry);
-    ry += 5;
+    ry += 8;
 
     const cellW = 60;
-    const cellH = 55;
+    const cellH = 52;
     for (let i = 0; i < tier.indices.length; i++) {
       const col = i % 6;
       const row = Math.floor(i / 6);
@@ -2717,7 +2750,7 @@ function drawStartGuideScreen() {
       ctx.fillText(type.name, ccx, ccy + 11);
     }
     const rows = Math.ceil(tier.indices.length / 6);
-    ry += rows * cellH + 6;
+    ry += rows * cellH + 14;
   }
 }
 
@@ -2863,6 +2896,104 @@ function drawSelectScreen() {
 
 }
 
+function downloadGameOverCard() {
+  const cardW = 320, cardH = 280, pad = 20, cardR = 16;
+  const cardX = (W - cardW) / 2;
+  const cardY = (H - cardH) / 2;
+
+  // Filename
+  const now = new Date();
+  const ts = now.getFullYear().toString()
+    + String(now.getMonth() + 1).padStart(2, '0')
+    + String(now.getDate()).padStart(2, '0')
+    + String(now.getHours()).padStart(2, '0')
+    + String(now.getMinutes()).padStart(2, '0')
+    + String(now.getSeconds()).padStart(2, '0');
+  const pName = playerName || CHARACTERS[selectedChar].name;
+  const filename = 'KEPCORUN_' + pName + '(' + score + ')_' + ts + '.png';
+
+  let dataUrl = null;
+
+  // 1차: 화면 직접 캡처
+  try {
+    const tmp = document.createElement('canvas');
+    tmp.width = cardW + pad * 2;
+    tmp.height = cardH + pad * 2;
+    tmp.getContext('2d').drawImage(canvas,
+      cardX - pad, cardY - pad, cardW + pad * 2, cardH + pad * 2,
+      0, 0, cardW + pad * 2, cardH + pad * 2);
+    dataUrl = tmp.toDataURL('image/png');
+  } catch (e) { /* tainted — fallback */ }
+
+  // 2차: 직접 캡처 실패 시 텍스트만 다시 그려서 저장
+  if (!dataUrl) {
+    const tmp = document.createElement('canvas');
+    tmp.width = cardW + pad * 2;
+    tmp.height = cardH + pad * 2;
+    const t = tmp.getContext('2d');
+    const cx = pad, cy = pad, midX = pad + cardW / 2;
+
+    t.fillStyle = '#0a0a1e';
+    t.fillRect(0, 0, tmp.width, tmp.height);
+
+    t.beginPath();
+    t.moveTo(cx + cardR, cy);
+    t.lineTo(cx + cardW - cardR, cy);
+    t.quadraticCurveTo(cx + cardW, cy, cx + cardW, cy + cardR);
+    t.lineTo(cx + cardW, cy + cardH - cardR);
+    t.quadraticCurveTo(cx + cardW, cy + cardH, cx + cardW - cardR, cy + cardH);
+    t.lineTo(cx + cardR, cy + cardH);
+    t.quadraticCurveTo(cx, cy + cardH, cx, cy + cardH - cardR);
+    t.lineTo(cx, cy + cardR);
+    t.quadraticCurveTo(cx, cy, cx + cardR, cy);
+    t.closePath();
+    t.fillStyle = 'rgba(20, 20, 40, 0.92)';
+    t.fill();
+    t.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    t.lineWidth = 2;
+    t.stroke();
+
+    t.textAlign = 'center';
+    t.fillStyle = '#E94560';
+    t.font = 'bold 36px sans-serif';
+    t.fillText('GAME OVER', midX, cy + 38);
+
+    const charType = CHARACTERS[selectedChar].type;
+    const cfg = DRAW_CONFIG[charType];
+    const spriteH = cfg ? cfg.run.drawH : 68;
+    const nameY = cy + 52 + spriteH + 18;
+
+    t.fillStyle = '#FFF';
+    t.font = 'bold 16px sans-serif';
+    t.fillText(pName, midX, nameY);
+
+    t.fillStyle = '#FFF';
+    t.font = 'bold 24px monospace';
+    t.fillText('Score: ' + score, midX, nameY + 30);
+
+    t.fillStyle = '#FFD700';
+    t.font = '18px monospace';
+    t.fillText('Best: ' + highScore, midX, nameY + 60);
+
+    if (score >= highScore && score > 0) {
+      t.fillStyle = '#FFD700';
+      t.font = 'bold 16px sans-serif';
+      t.fillText('\u2605 NEW RECORD! \u2605', midX, nameY + 85);
+    }
+
+    dataUrl = tmp.toDataURL('image/png');
+  }
+
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = dataUrl;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  saveNotifyTimer = 120;
+}
+
 function drawGameOver() {
   // Animated dim overlay — fades in over first 30 frames
   const overlayAlpha = Math.min(0.6, gameOverTimer * 0.02);
@@ -2979,6 +3110,75 @@ function drawGameOver() {
     if (blink) {
       ctx.fillText('Enter\uB97C \uB20C\uB7EC \uC7AC\uC2DC\uC791', W / 2, cardY + cardH - 14);
     }
+
+    // --- Bottom buttons (YouTube + Ranking) ---
+    const btnW = 130, btnH = 32, gap = 12, radius = 6;
+    const btnY = cardY + cardH + 12;
+    const ytBtnX = W / 2 - gap / 2 - btnW;
+    const rkBtnX = W / 2 + gap / 2;
+
+    // YouTube button
+    ctx.fillStyle = '#FF0000';
+    ctx.beginPath();
+    ctx.moveTo(ytBtnX + radius, btnY);
+    ctx.lineTo(ytBtnX + btnW - radius, btnY);
+    ctx.quadraticCurveTo(ytBtnX + btnW, btnY, ytBtnX + btnW, btnY + radius);
+    ctx.lineTo(ytBtnX + btnW, btnY + btnH - radius);
+    ctx.quadraticCurveTo(ytBtnX + btnW, btnY + btnH, ytBtnX + btnW - radius, btnY + btnH);
+    ctx.lineTo(ytBtnX + radius, btnY + btnH);
+    ctx.quadraticCurveTo(ytBtnX, btnY + btnH, ytBtnX, btnY + btnH - radius);
+    ctx.lineTo(ytBtnX, btnY + radius);
+    ctx.quadraticCurveTo(ytBtnX, btnY, ytBtnX + radius, btnY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('\u25B6 YouTube', ytBtnX + btnW / 2, btnY + btnH / 2 + 5);
+
+    // Save button
+    ctx.fillStyle = '#4a90d9';
+    ctx.beginPath();
+    ctx.moveTo(rkBtnX + radius, btnY);
+    ctx.lineTo(rkBtnX + btnW - radius, btnY);
+    ctx.quadraticCurveTo(rkBtnX + btnW, btnY, rkBtnX + btnW, btnY + radius);
+    ctx.lineTo(rkBtnX + btnW, btnY + btnH - radius);
+    ctx.quadraticCurveTo(rkBtnX + btnW, btnY + btnH, rkBtnX + btnW - radius, btnY + btnH);
+    ctx.lineTo(rkBtnX + radius, btnY + btnH);
+    ctx.quadraticCurveTo(rkBtnX, btnY + btnH, rkBtnX, btnY + btnH - radius);
+    ctx.lineTo(rkBtnX, btnY + radius);
+    ctx.quadraticCurveTo(rkBtnX, btnY, rkBtnX + radius, btnY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('\uD83D\uDCBE \uC800\uC7A5\uD558\uAE30', rkBtnX + btnW / 2, btnY + btnH / 2 + 5);
+  }
+
+  // --- Save notification ---
+  if (saveNotifyTimer > 0) {
+    saveNotifyTimer--;
+    const nAlpha = saveNotifyTimer > 90 ? 1 : saveNotifyTimer / 90;
+    const nY = cardY - 30 - (1 - Math.min(1, (120 - saveNotifyTimer) / 10)) * 15;
+    ctx.globalAlpha = nAlpha;
+    ctx.fillStyle = 'rgba(40, 40, 40, 0.85)';
+    const nW = 200, nH = 30, nR = 8;
+    const nX = W / 2 - nW / 2;
+    ctx.beginPath();
+    ctx.moveTo(nX + nR, nY);
+    ctx.lineTo(nX + nW - nR, nY);
+    ctx.quadraticCurveTo(nX + nW, nY, nX + nW, nY + nR);
+    ctx.lineTo(nX + nW, nY + nH - nR);
+    ctx.quadraticCurveTo(nX + nW, nY + nH, nX + nW - nR, nY + nH);
+    ctx.lineTo(nX + nR, nY + nH);
+    ctx.quadraticCurveTo(nX, nY + nH, nX, nY + nH - nR);
+    ctx.lineTo(nX, nY + nR);
+    ctx.quadraticCurveTo(nX, nY, nX + nR, nY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#4CAF50';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u2705 \uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4!', W / 2, nY + nH / 2 + 5);
   }
 
   ctx.globalAlpha = 1;
