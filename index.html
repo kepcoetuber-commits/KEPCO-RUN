@@ -2898,10 +2898,86 @@ function drawSelectScreen() {
 
 function downloadGameOverCard() {
   const cardW = 320, cardH = 280, pad = 20, cardR = 16;
-  const cardX = (W - cardW) / 2;
-  const cardY = (H - cardH) / 2;
+  const tmp = document.createElement('canvas');
+  tmp.width = cardW + pad * 2;
+  tmp.height = cardH + pad * 2;
+  const t = tmp.getContext('2d');
+  const cx = pad, cy = pad, midX = pad + cardW / 2;
 
-  // Filename
+  // 배경
+  t.fillStyle = '#0a0a1e';
+  t.fillRect(0, 0, tmp.width, tmp.height);
+
+  // 카드
+  t.beginPath();
+  t.moveTo(cx + cardR, cy);
+  t.lineTo(cx + cardW - cardR, cy);
+  t.quadraticCurveTo(cx + cardW, cy, cx + cardW, cy + cardR);
+  t.lineTo(cx + cardW, cy + cardH - cardR);
+  t.quadraticCurveTo(cx + cardW, cy + cardH, cx + cardW - cardR, cy + cardH);
+  t.lineTo(cx + cardR, cy + cardH);
+  t.quadraticCurveTo(cx, cy + cardH, cx, cy + cardH - cardR);
+  t.lineTo(cx, cy + cardR);
+  t.quadraticCurveTo(cx, cy, cx + cardR, cy);
+  t.closePath();
+  t.fillStyle = 'rgba(20, 20, 40, 0.92)';
+  t.fill();
+  t.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  t.lineWidth = 2;
+  t.stroke();
+
+  // GAME OVER
+  t.textAlign = 'center';
+  t.fillStyle = '#E94560';
+  t.font = 'bold 36px sans-serif';
+  t.fillText('GAME OVER', midX, cy + 38);
+
+  // 캐릭터 (loadFrames에서 data URL로 변환된 이미지 사용)
+  const charType = CHARACTERS[selectedChar].type;
+  const cfg = DRAW_CONFIG[charType];
+  const F = getFrames();
+  let spriteDrawn = false;
+  if (F && cfg && F.idle.length > 0) {
+    const idleIdx = Math.floor(Date.now() / 200) % F.idle.length;
+    const img = F.idle[idleIdx];
+    if (img && img.complete && img.naturalWidth > 0) {
+      try {
+        const aspect = img.naturalWidth / img.naturalHeight;
+        const dh = cfg.run.drawH;
+        const dw = dh * aspect;
+        t.drawImage(img, midX - dw / 2, cy + 52, dw, dh);
+        spriteDrawn = true;
+      } catch(e) {}
+    }
+  }
+
+  // 닉네임
+  const pName = playerName || CHARACTERS[selectedChar].name;
+  const spriteH = cfg ? cfg.run.drawH : 68;
+  const nameY = cy + 52 + spriteH + 18;
+  t.fillStyle = '#FFF';
+  t.font = 'bold 16px sans-serif';
+  t.textAlign = 'center';
+  t.fillText(pName, midX, nameY);
+
+  // 점수
+  t.fillStyle = '#FFF';
+  t.font = 'bold 24px monospace';
+  t.fillText('Score: ' + score, midX, nameY + 30);
+
+  // 최고기록
+  t.fillStyle = '#FFD700';
+  t.font = '18px monospace';
+  t.fillText('Best: ' + highScore, midX, nameY + 60);
+
+  // NEW RECORD
+  if (score >= highScore && score > 0) {
+    t.fillStyle = '#FFD700';
+    t.font = 'bold 16px sans-serif';
+    t.fillText('\u2605 NEW RECORD! \u2605', midX, nameY + 85);
+  }
+
+  // 파일명: KEPCORUN_닉네임(점수)_YYYYMMDDHHMMSS
   const now = new Date();
   const ts = now.getFullYear().toString()
     + String(now.getMonth() + 1).padStart(2, '0')
@@ -2909,79 +2985,42 @@ function downloadGameOverCard() {
     + String(now.getHours()).padStart(2, '0')
     + String(now.getMinutes()).padStart(2, '0')
     + String(now.getSeconds()).padStart(2, '0');
-  const pName = playerName || CHARACTERS[selectedChar].name;
   const filename = 'KEPCORUN_' + pName + '(' + score + ')_' + ts + '.png';
 
-  let dataUrl = null;
-
-  // 1차: 화면 직접 캡처
+  // 다운로드 (스프라이트가 캔버스를 taint했으면 재시도)
+  let dataUrl;
   try {
-    const tmp = document.createElement('canvas');
-    tmp.width = cardW + pad * 2;
-    tmp.height = cardH + pad * 2;
-    tmp.getContext('2d').drawImage(canvas,
-      cardX - pad, cardY - pad, cardW + pad * 2, cardH + pad * 2,
-      0, 0, cardW + pad * 2, cardH + pad * 2);
     dataUrl = tmp.toDataURL('image/png');
-  } catch (e) { /* tainted — fallback */ }
-
-  // 2차: 직접 캡처 실패 시 텍스트만 다시 그려서 저장
-  if (!dataUrl) {
-    const tmp = document.createElement('canvas');
-    tmp.width = cardW + pad * 2;
-    tmp.height = cardH + pad * 2;
-    const t = tmp.getContext('2d');
-    const cx = pad, cy = pad, midX = pad + cardW / 2;
-
-    t.fillStyle = '#0a0a1e';
-    t.fillRect(0, 0, tmp.width, tmp.height);
-
-    t.beginPath();
-    t.moveTo(cx + cardR, cy);
-    t.lineTo(cx + cardW - cardR, cy);
-    t.quadraticCurveTo(cx + cardW, cy, cx + cardW, cy + cardR);
-    t.lineTo(cx + cardW, cy + cardH - cardR);
-    t.quadraticCurveTo(cx + cardW, cy + cardH, cx + cardW - cardR, cy + cardH);
-    t.lineTo(cx + cardR, cy + cardH);
-    t.quadraticCurveTo(cx, cy + cardH, cx, cy + cardH - cardR);
-    t.lineTo(cx, cy + cardR);
-    t.quadraticCurveTo(cx, cy, cx + cardR, cy);
-    t.closePath();
-    t.fillStyle = 'rgba(20, 20, 40, 0.92)';
-    t.fill();
-    t.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-    t.lineWidth = 2;
-    t.stroke();
-
-    t.textAlign = 'center';
-    t.fillStyle = '#E94560';
-    t.font = 'bold 36px sans-serif';
-    t.fillText('GAME OVER', midX, cy + 38);
-
-    const charType = CHARACTERS[selectedChar].type;
-    const cfg = DRAW_CONFIG[charType];
-    const spriteH = cfg ? cfg.run.drawH : 68;
-    const nameY = cy + 52 + spriteH + 18;
-
-    t.fillStyle = '#FFF';
-    t.font = 'bold 16px sans-serif';
-    t.fillText(pName, midX, nameY);
-
-    t.fillStyle = '#FFF';
-    t.font = 'bold 24px monospace';
-    t.fillText('Score: ' + score, midX, nameY + 30);
-
-    t.fillStyle = '#FFD700';
-    t.font = '18px monospace';
-    t.fillText('Best: ' + highScore, midX, nameY + 60);
-
-    if (score >= highScore && score > 0) {
-      t.fillStyle = '#FFD700';
-      t.font = 'bold 16px sans-serif';
-      t.fillText('\u2605 NEW RECORD! \u2605', midX, nameY + 85);
-    }
-
-    dataUrl = tmp.toDataURL('image/png');
+  } catch(e) {
+    // taint 발생 — 스프라이트 없이 다시 그리기
+    const tmp2 = document.createElement('canvas');
+    tmp2.width = tmp.width; tmp2.height = tmp.height;
+    const t2 = tmp2.getContext('2d');
+    t2.fillStyle = '#0a0a1e';
+    t2.fillRect(0, 0, tmp2.width, tmp2.height);
+    t2.beginPath();
+    t2.moveTo(cx+cardR,cy);t2.lineTo(cx+cardW-cardR,cy);
+    t2.quadraticCurveTo(cx+cardW,cy,cx+cardW,cy+cardR);
+    t2.lineTo(cx+cardW,cy+cardH-cardR);
+    t2.quadraticCurveTo(cx+cardW,cy+cardH,cx+cardW-cardR,cy+cardH);
+    t2.lineTo(cx+cardR,cy+cardH);
+    t2.quadraticCurveTo(cx,cy+cardH,cx,cy+cardH-cardR);
+    t2.lineTo(cx,cy+cardR);
+    t2.quadraticCurveTo(cx,cy,cx+cardR,cy);
+    t2.closePath();
+    t2.fillStyle='rgba(20,20,40,0.92)';t2.fill();
+    t2.strokeStyle='rgba(255,255,255,0.15)';t2.lineWidth=2;t2.stroke();
+    t2.textAlign='center';
+    t2.fillStyle='#E94560';t2.font='bold 36px sans-serif';
+    t2.fillText('GAME OVER',midX,cy+38);
+    t2.fillStyle='#FFF';t2.font='bold 16px sans-serif';
+    t2.fillText(pName,midX,nameY);
+    t2.fillStyle='#FFF';t2.font='bold 24px monospace';
+    t2.fillText('Score: '+score,midX,nameY+30);
+    t2.fillStyle='#FFD700';t2.font='18px monospace';
+    t2.fillText('Best: '+highScore,midX,nameY+60);
+    if(score>=highScore&&score>0){t2.fillStyle='#FFD700';t2.font='bold 16px sans-serif';t2.fillText('\u2605 NEW RECORD! \u2605',midX,nameY+85);}
+    dataUrl = tmp2.toDataURL('image/png');
   }
 
   const link = document.createElement('a');
