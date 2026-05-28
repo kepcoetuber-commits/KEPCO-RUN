@@ -118,18 +118,20 @@ nicknameInput.value = playerName;
 
 // Position nicknameInput over the canvas nickname box so iOS Safari treats it as a native tap.
 // With pointer-events:auto the user taps the real input directly — no JS focus() tricks needed.
+const NAME_BOX_W = 174, NAME_BOX_H = 30, CONFIRM_BTN_W = 44, NAME_GAP = 6;
+const NAME_TOTAL_W = NAME_BOX_W + NAME_GAP + CONFIRM_BTN_W; // 224
+const NAME_BOX_X = W / 2 - NAME_TOTAL_W / 2;
+const NAME_BOX_Y = H / 2 + 30 - NAME_BOX_H / 2;
+const CONFIRM_BTN_X = NAME_BOX_X + NAME_BOX_W + NAME_GAP;
+
 function positionNicknameInput() {
   const rect = canvas.getBoundingClientRect();
   const scaleX = rect.width / W;
   const scaleY = rect.height / H;
-  const nameBoxW = 220, nameBoxH = 30;
-  const nameBoxX = W / 2 - nameBoxW / 2;
-  const nameBoxY = H / 2 + 30 - nameBoxH / 2;
-  // position:fixed → no scroll offset needed
-  nicknameInput.style.left = (rect.left + nameBoxX * scaleX) + 'px';
-  nicknameInput.style.top  = (rect.top  + nameBoxY * scaleY) + 'px';
-  nicknameInput.style.width  = (nameBoxW * scaleX) + 'px';
-  nicknameInput.style.height = (nameBoxH * scaleY) + 'px';
+  nicknameInput.style.left   = (rect.left + NAME_BOX_X * scaleX) + 'px';
+  nicknameInput.style.top    = (rect.top  + NAME_BOX_Y * scaleY) + 'px';
+  nicknameInput.style.width  = (NAME_BOX_W * scaleX) + 'px';
+  nicknameInput.style.height = (NAME_BOX_H * scaleY) + 'px';
 }
 positionNicknameInput();
 window.addEventListener('resize', positionNicknameInput);
@@ -138,11 +140,15 @@ nicknameInput.addEventListener('focus', () => {
   if (gameState === STATE.START && !isEditingName) {
     isEditingName = true;
     nicknameInput.value = '';
-    nicknameInput.style.pointerEvents = 'none'; // canvas handles further touches
+    nicknameInput.style.pointerEvents = 'none';
   }
 });
 nicknameInput.addEventListener('blur', () => {
-  if (isEditingName) confirmName();
+  // Don't confirmName on blur — user taps ✓ button or Enter to confirm.
+  // Just mark as not editing so the input becomes tappable again.
+  if (isEditingName && !playerName) {
+    isEditingName = false;
+  }
 });
 let speed = 8;
 let baseSpeed = 8;
@@ -471,12 +477,6 @@ function handleStartClick(e) {
     return;
   }
 
-  // Nickname area
-  const nameAreaY = H / 2 + 30;
-  const nameBoxW = 220, nameBoxH = 30;
-  const nameBoxX = W / 2 - nameBoxW / 2;
-  const nameBoxY = nameAreaY - nameBoxH / 2;
-
   // Pencil edit button (when name exists, not editing)
   if (playerName && !isEditingName && ctx._pencilBtn) {
     const pb = ctx._pencilBtn;
@@ -486,19 +486,24 @@ function handleStartClick(e) {
     }
   }
 
-  // Nickname input box click (when no name or editing)
+  // Confirm (✓) button
   if (!playerName || isEditingName) {
-    if (mx >= nameBoxX && mx <= nameBoxX + nameBoxW && my >= nameBoxY && my <= nameBoxY + nameBoxH) {
+    if (ctx._confirmBtn) {
+      const cb = ctx._confirmBtn;
+      if (mx >= cb.x && mx <= cb.x + cb.w && my >= cb.y && my <= cb.y + cb.h) {
+        if (isEditingName && nicknameInput.value.trim().length > 0) confirmName();
+        return;
+      }
+    }
+    // Nickname input box — canvas tap to re-focus (fallback for non-iOS)
+    if (mx >= NAME_BOX_X && mx <= NAME_BOX_X + NAME_BOX_W && my >= NAME_BOX_Y && my <= NAME_BOX_Y + NAME_BOX_H) {
       if (!isEditingName) startEditingName();
       return;
     }
   }
 
-  // If editing name, clicking outside the box confirms
-  if (isEditingName) {
-    confirmName();
-    return;
-  }
+  // Tapping outside while editing: do nothing (user uses ✓ button or Enter to confirm)
+  if (isEditingName) return;
 
   // High score reset button
   if (highScore > 0) {
@@ -2437,50 +2442,15 @@ function drawStartScreen() {
   ctx.fillText('KEPCO RUN \uAC8C\uC784\uC5D0\uC11C \uC9C1\uC811 \uC804\uB825\uB9DD\uC744 \uB2EC\uB9AC\uBA70 \uCD5C\uACE0 \uC810\uC218\uC5D0 \uB3C4\uC804\uD574\uBCF4\uC138\uC694!', W / 2, H / 2 + 10);
 
   // Nickname area
-  const nameAreaY = H / 2 + 30;
-  const nameBoxW = 220, nameBoxH = 30;
-  const nameBoxX = W / 2 - nameBoxW / 2;
-  const nameBoxY = nameAreaY - nameBoxH / 2;
+  const nameAreaY = NAME_BOX_Y + NAME_BOX_H / 2;
 
-  if (isEditingName) {
-    // Editing mode: show input box with blinking cursor
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
-    ctx.strokeStyle = '#E94560';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
-
-    ctx.fillStyle = '#333';
-    ctx.font = '400 15px ' + NF;
-    ctx.textAlign = 'center';
-    const displayText = nicknameInput.value;
-    if (displayText.length > 0) {
-      ctx.fillText(displayText, W / 2, nameAreaY + 5);
-    } else {
-      ctx.fillStyle = '#aaa';
-      ctx.fillText('\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694', W / 2, nameAreaY + 5);
-    }
-    // Blinking cursor
-    const cursorBlink = Math.floor(Date.now() / 500) % 2;
-    if (cursorBlink) {
-      ctx.font = '400 15px ' + NF;
-      const textW = displayText.length > 0 ? ctx.measureText(displayText).width : 0;
-      const cursorX = W / 2 + textW / 2 + 2;
-      ctx.strokeStyle = '#E94560';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(cursorX, nameBoxY + 5);
-      ctx.lineTo(cursorX, nameBoxY + nameBoxH - 5);
-      ctx.stroke();
-    }
-  } else if (playerName) {
-    // Display mode: show player name + pencil edit button
+  if (playerName && !isEditingName) {
+    // Has name: show "\uD50C\uB808\uC774\uC5B4: X" + pencil edit button
     ctx.fillStyle = '#555';
     ctx.font = '400 14px ' + NF;
     ctx.textAlign = 'center';
     const nameText = '\uD50C\uB808\uC774\uC5B4: ' + playerName;
     ctx.fillText(nameText, W / 2, nameAreaY + 5);
-    // Pencil edit button
     const nameTextW = ctx.measureText(nameText).width;
     const pencilX = W / 2 + nameTextW / 2 + 12;
     const pencilY = nameAreaY - 6;
@@ -2489,19 +2459,48 @@ function drawStartScreen() {
     ctx.fillStyle = '#999';
     ctx.textAlign = 'center';
     ctx.fillText('\u270F\uFE0F', pencilX, pencilY + 12);
-    // Store pencil hit area for click handling
     ctx._pencilBtn = { x: pencilX - pencilSize / 2 - 4, y: pencilY - 2, w: pencilSize + 8, h: pencilSize + 4 };
   } else {
-    // No nickname: show clickable input placeholder
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fillRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(nameBoxX, nameBoxY, nameBoxW, nameBoxH);
-    ctx.fillStyle = '#aaa';
+    // Input box (tappable overlay handles the actual input)
+    const hasText = nicknameInput.value.length > 0;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(NAME_BOX_X, NAME_BOX_Y, NAME_BOX_W, NAME_BOX_H);
+    ctx.strokeStyle = isEditingName ? '#E94560' : '#ccc';
+    ctx.lineWidth = isEditingName ? 2 : 1;
+    ctx.strokeRect(NAME_BOX_X, NAME_BOX_Y, NAME_BOX_W, NAME_BOX_H);
+
     ctx.font = '400 14px ' + NF;
+    ctx.textAlign = 'left';
+    if (isEditingName && hasText) {
+      ctx.fillStyle = '#333';
+      ctx.fillText(nicknameInput.value, NAME_BOX_X + 10, nameAreaY + 5);
+      // blinking cursor
+      if (Math.floor(Date.now() / 500) % 2) {
+        const tw = ctx.measureText(nicknameInput.value).width;
+        ctx.strokeStyle = '#E94560';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(NAME_BOX_X + 10 + tw + 2, NAME_BOX_Y + 5);
+        ctx.lineTo(NAME_BOX_X + 10 + tw + 2, NAME_BOX_Y + NAME_BOX_H - 5);
+        ctx.stroke();
+      }
+    } else {
+      ctx.fillStyle = '#aaa';
+      ctx.textAlign = 'center';
+      ctx.fillText(isEditingName ? '\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694' : '\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694 \u2191', W / 2 - (NAME_TOTAL_W / 2 - NAME_BOX_W / 2), nameAreaY + 5);
+    }
+
+    // Confirm button \u2713
+    const canConfirm = isEditingName && hasText;
+    ctx.fillStyle = canConfirm ? '#E94560' : '#ddd';
+    ctx.beginPath();
+    ctx.roundRect(CONFIRM_BTN_X, NAME_BOX_Y, CONFIRM_BTN_W, NAME_BOX_H, 4);
+    ctx.fill();
+    ctx.fillStyle = canConfirm ? '#fff' : '#aaa';
+    ctx.font = '700 16px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('\uB2C9\uB124\uC784\uC744 \uC785\uB825\uD558\uC138\uC694', W / 2, nameAreaY + 5);
+    ctx.fillText('\u2713', CONFIRM_BTN_X + CONFIRM_BTN_W / 2, nameAreaY + 6);
+    ctx._confirmBtn = { x: CONFIRM_BTN_X, y: NAME_BOX_Y, w: CONFIRM_BTN_W, h: NAME_BOX_H };
   }
 
   // Instruction
@@ -2510,15 +2509,7 @@ function drawStartScreen() {
   ctx.textAlign = 'center';
   const blink = Math.floor(Date.now() / 500) % 2;
   if (playerName && !isEditingName) {
-    if (blink) {
-      ctx.fillText('\uC2A4\uD398\uC774\uC2A4\uBC14 \uB610\uB294 \uD654\uBA74\uC744 \uB20C\uB7EC \uC2DC\uC791', W / 2, H / 2 + 60);
-    }
-  } else if (!isEditingName) {
-    ctx.fillStyle = '#E94560';
-    ctx.font = '400 13px ' + NF;
-    if (blink) {
-      ctx.fillText('\uB2C9\uB124\uC784\uC744 \uBA3C\uC800 \uC785\uB825\uD574\uC8FC\uC138\uC694', W / 2, H / 2 + 60);
-    }
+    if (blink) ctx.fillText('\uC2A4\uD398\uC774\uC2A4\uBC14 \uB610\uB294 \uD654\uBA74\uC744 \uB20C\uB7EC \uC2DC\uC791', W / 2, H / 2 + 65);
   }
 
   // High score + reset button
