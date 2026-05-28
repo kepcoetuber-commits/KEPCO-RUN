@@ -682,11 +682,23 @@ canvas.addEventListener('click', (e) => {
   }
 });
 canvas.addEventListener('touchstart', (e) => {
-  e.preventDefault();
+  const touch = e.touches[0];
+  // Safari blocks keyboard if preventDefault is called before focus().
+  // Skip it when tapping the nickname input box so the keyboard shows up.
+  const isNicknameTap = (() => {
+    if (gameState !== STATE.START || playerName || isEditingName) return false;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (touch.clientX - rect.left) * (W / rect.width);
+    const my = (touch.clientY - rect.top) * (H / rect.height);
+    const nameBoxW = 220, nameBoxH = 30;
+    const nameBoxX = W / 2 - nameBoxW / 2;
+    const nameBoxY = H / 2 + 30 - nameBoxH / 2;
+    return mx >= nameBoxX && mx <= nameBoxX + nameBoxW && my >= nameBoxY && my <= nameBoxY + nameBoxH;
+  })();
+  if (!isNicknameTap) e.preventDefault();
   if (gameState === STATE.START) {
-    handleStartClick(e.touches[0]);
+    handleStartClick(touch);
   } else if (gameState === STATE.SELECT) {
-    const touch = e.touches[0];
     handleSelectClick(touch);
   } else {
     handleInput(e);
