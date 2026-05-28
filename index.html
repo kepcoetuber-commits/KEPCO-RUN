@@ -673,6 +673,13 @@ document.addEventListener('keydown', (e) => {
   }
 });
 let suppressNextClick = false;
+canvas.addEventListener('touchend', (e) => {
+  // Prevent iOS from seeing touchend on the canvas as "tap outside input" → keyboard dismiss
+  if (suppressNextClick) {
+    e.preventDefault();
+    suppressNextClick = false;
+  }
+});
 canvas.addEventListener('click', (e) => {
   if (suppressNextClick) { suppressNextClick = false; return; }
   if (gameState === STATE.START) {
