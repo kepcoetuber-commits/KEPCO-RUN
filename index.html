@@ -363,7 +363,7 @@ function startEditingName() {
   isEditingName = true;
   nicknameInput.value = '';
   nicknameInput.style.pointerEvents = 'auto';
-  setTimeout(() => nicknameInput.focus(), 0);
+  nicknameInput.focus();
 }
 
 function confirmName() {
