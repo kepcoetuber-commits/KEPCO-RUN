@@ -30,7 +30,7 @@ canvas {
 <body>
 <canvas id="game" width="800" height="400"></canvas>
 <input id="nicknameInput" type="text" maxlength="8"
-  style="position:absolute;opacity:0;pointer-events:none;">
+  style="position:fixed;opacity:0.01;pointer-events:none;border:none;outline:none;background:transparent;color:transparent;font-size:16px;caret-color:transparent;left:-9999px;top:-9999px;width:1px;height:1px;">
 <script>
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -115,6 +115,35 @@ let isPaused = false;
 let pauseBtnRect = { x: 0, y: 10, w: 36, h: 28 };
 const nicknameInput = document.getElementById('nicknameInput');
 nicknameInput.value = playerName;
+
+// Position nicknameInput over the canvas nickname box so iOS Safari treats it as a native tap.
+// With pointer-events:auto the user taps the real input directly — no JS focus() tricks needed.
+function positionNicknameInput() {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width / W;
+  const scaleY = rect.height / H;
+  const nameBoxW = 220, nameBoxH = 30;
+  const nameBoxX = W / 2 - nameBoxW / 2;
+  const nameBoxY = H / 2 + 30 - nameBoxH / 2;
+  // position:fixed → no scroll offset needed
+  nicknameInput.style.left = (rect.left + nameBoxX * scaleX) + 'px';
+  nicknameInput.style.top  = (rect.top  + nameBoxY * scaleY) + 'px';
+  nicknameInput.style.width  = (nameBoxW * scaleX) + 'px';
+  nicknameInput.style.height = (nameBoxH * scaleY) + 'px';
+}
+positionNicknameInput();
+window.addEventListener('resize', positionNicknameInput);
+
+nicknameInput.addEventListener('focus', () => {
+  if (gameState === STATE.START && !isEditingName) {
+    isEditingName = true;
+    nicknameInput.value = '';
+    nicknameInput.style.pointerEvents = 'none'; // canvas handles further touches
+  }
+});
+nicknameInput.addEventListener('blur', () => {
+  if (isEditingName) confirmName();
+});
 let speed = 8;
 let baseSpeed = 8;
 let spawnTimer = 0;
@@ -672,16 +701,7 @@ document.addEventListener('keydown', (e) => {
     else if (e.code === 'Digit2') { selectedChar = 1; resetGame(); gameState = STATE.PLAYING; }
   }
 });
-let suppressNextClick = false;
-canvas.addEventListener('touchend', (e) => {
-  // Prevent iOS from seeing touchend on the canvas as "tap outside input" → keyboard dismiss
-  if (suppressNextClick) {
-    e.preventDefault();
-    suppressNextClick = false;
-  }
-});
 canvas.addEventListener('click', (e) => {
-  if (suppressNextClick) { suppressNextClick = false; return; }
   if (gameState === STATE.START) {
     handleStartClick(e);
   } else if (gameState === STATE.SELECT) {
@@ -691,25 +711,11 @@ canvas.addEventListener('click', (e) => {
   }
 });
 canvas.addEventListener('touchstart', (e) => {
-  const touch = e.touches[0];
-  // Safari blocks keyboard if preventDefault is called before focus().
-  // Skip it when tapping the nickname input box so the keyboard shows up.
-  const isNicknameTap = (() => {
-    if (gameState !== STATE.START || playerName || isEditingName) return false;
-    const rect = canvas.getBoundingClientRect();
-    const mx = (touch.clientX - rect.left) * (W / rect.width);
-    const my = (touch.clientY - rect.top) * (H / rect.height);
-    const nameBoxW = 220, nameBoxH = 30;
-    const nameBoxX = W / 2 - nameBoxW / 2;
-    const nameBoxY = H / 2 + 30 - nameBoxH / 2;
-    return mx >= nameBoxX && mx <= nameBoxX + nameBoxW && my >= nameBoxY && my <= nameBoxY + nameBoxH;
-  })();
-  if (!isNicknameTap) e.preventDefault();
-  else suppressNextClick = true;
+  e.preventDefault();
   if (gameState === STATE.START) {
-    handleStartClick(touch);
+    handleStartClick(e.touches[0]);
   } else if (gameState === STATE.SELECT) {
-    handleSelectClick(touch);
+    handleSelectClick(e.touches[0]);
   } else {
     handleInput(e);
   }
@@ -837,6 +843,10 @@ function rectCollision(a, b) {
 }
 
 function update() {
+  // Keep nickname input tappable only when the user needs to enter a name
+  nicknameInput.style.pointerEvents =
+    (gameState === STATE.START && !playerName && !isEditingName) ? 'auto' : 'none';
+
   // Game over animation update
   if (gameState === STATE.GAME_OVER) {
     gameOverTimer++;
