@@ -672,7 +672,9 @@ document.addEventListener('keydown', (e) => {
     else if (e.code === 'Digit2') { selectedChar = 1; resetGame(); gameState = STATE.PLAYING; }
   }
 });
+let suppressNextClick = false;
 canvas.addEventListener('click', (e) => {
+  if (suppressNextClick) { suppressNextClick = false; return; }
   if (gameState === STATE.START) {
     handleStartClick(e);
   } else if (gameState === STATE.SELECT) {
@@ -696,6 +698,7 @@ canvas.addEventListener('touchstart', (e) => {
     return mx >= nameBoxX && mx <= nameBoxX + nameBoxW && my >= nameBoxY && my <= nameBoxY + nameBoxH;
   })();
   if (!isNicknameTap) e.preventDefault();
+  else suppressNextClick = true;
   if (gameState === STATE.START) {
     handleStartClick(touch);
   } else if (gameState === STATE.SELECT) {
